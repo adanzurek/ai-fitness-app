@@ -87,6 +87,11 @@ export default function SignInScreen() {
     router.push("/signup" as any);
   };
 
+  const handleSkip = () => {
+    console.log('Skipping auth, navigating to home stack');
+    router.replace("/(tabs)");
+  };
+
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <KeyboardAvoidingView
@@ -168,6 +173,17 @@ export default function SignInScreen() {
             disabled={loading}
           >
             <Text style={styles.googleButtonText}>Continue with Google</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.skipButton}
+            onPress={handleSkip}
+            disabled={loading}
+            accessibilityRole="button"
+            accessibilityLabel="Skip sign in and continue to app"
+            testID="signInSkipButton"
+          >
+            <Text style={styles.skipButtonText}>Skip for now</Text>
           </TouchableOpacity>
 
           <View style={styles.signUpContainer}>
@@ -308,5 +324,14 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "600" as const,
     color: Colors.text,
+  },
+  skipButton: {
+    marginTop: 16,
+    alignItems: 'center',
+  },
+  skipButtonText: {
+    fontSize: 16,
+    fontWeight: "600" as const,
+    color: Colors.textSecondary,
   },
 });
