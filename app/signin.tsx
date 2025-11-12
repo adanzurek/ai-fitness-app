@@ -7,6 +7,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { supabase } from "@/lib/supabase";
 import * as WebBrowser from 'expo-web-browser';
+import { setSkipAuth } from "@/lib/authSkip";
 
 import { redirectUri, getCodeFromUrl } from '@/lib/linking';
 
@@ -38,6 +39,7 @@ export default function SignInScreen() {
       console.log('Sign in successful, session:', data.session ? 'exists' : 'none');
       
       if (data.session) {
+        setSkipAuth(false);
         router.replace("/(tabs)");
       } else {
         Alert.alert('Error', 'Sign in succeeded but no session was created. Please try again.');
@@ -73,6 +75,7 @@ export default function SignInScreen() {
         if (code) {
           const { error: sessionError } = await supabase.auth.exchangeCodeForSession(code);
           if (sessionError) throw sessionError;
+          setSkipAuth(false);
           router.replace("/(tabs)");
         }
       }
@@ -89,6 +92,7 @@ export default function SignInScreen() {
 
   const handleSkip = () => {
     console.log('Skipping auth, navigating to home stack');
+    setSkipAuth(true);
     router.replace("/(tabs)");
   };
 

@@ -2,10 +2,11 @@ import 'react-native-url-polyfill/auto';
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Stack, useRouter, useSegments } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { FitnessContext } from "@/contexts/FitnessContext";
 import { useSupabaseUser } from "@/hooks/useSupabaseUser";
+import { getSkipAuth, subscribeSkipAuth } from "@/lib/authSkip";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -25,18 +26,24 @@ function SessionGate({ children }: { children: React.ReactNode }) {
   const { user, loading } = useSupabaseUser();
   const segments = useSegments();
   const router = useRouter();
+  const [skipAuth, setSkipAuthState] = useState<boolean>(getSkipAuth());
+
+  useEffect(() => {
+    const unsubscribe = subscribeSkipAuth(setSkipAuthState);
+    return unsubscribe;
+  }, []);
 
   useEffect(() => {
     if (loading) return;
 
-    const inAuthGroup = segments[0] === '(tabs)';
+    const inTabsGroup = segments[0] === '(tabs)';
 
-    if (!user && inAuthGroup) {
+    if (!user && !skipAuth && inTabsGroup) {
       router.replace('/signin');
-    } else if (user && !inAuthGroup) {
+    } else if ((user || skipAuth) && !inTabsGroup) {
       router.replace('/(tabs)');
     }
-  }, [user, loading, segments]);
+  }, [user, loading, segments, skipAuth, router]);
 
   return <>{children}</>;
 }
