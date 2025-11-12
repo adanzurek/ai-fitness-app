@@ -1,5 +1,5 @@
 import { Tabs } from "expo-router";
-import { Home, MessageCircle, TrendingUp, UtensilsCrossed, CalendarDays } from "lucide-react-native";
+import { Home, MessageCircle, TrendingUp, UtensilsCrossed, CalendarDays, Wrench } from "lucide-react-native";
 import React from "react";
 import { Platform } from "react-native";
 import Colors from "@/constants/colors";
@@ -51,6 +51,13 @@ export default function TabLayout() {
         options={{
           title: "Coach",
           tabBarIcon: ({ color, size }) => <MessageCircle color={color} size={size} />,
+        }}
+      />
+      <Tabs.Screen
+        name="tools"
+        options={{
+          title: "Tools",
+          tabBarIcon: ({ color, size }) => <Wrench color={color} size={size} />,
         }}
       />
       <Tabs.Screen

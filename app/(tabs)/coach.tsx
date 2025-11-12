@@ -1,6 +1,6 @@
 import { StyleSheet, Text, View, ScrollView, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform } from "react-native";
 import { useState, useRef, useEffect } from "react";
-import { useRorkAgent, createRorkTool } from "@rork/toolkit-sdk";
+import { useRorkAgent, createRorkTool } from "@/hooks/useCoachAgent";
 import { z } from "zod";
 import { useFitness } from "@/contexts/FitnessContext";
 import { Send, Bot, User } from "lucide-react-native";
