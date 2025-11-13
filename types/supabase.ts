@@ -1,14 +1,20 @@
 export type FitnessLevel = "beginner" | "intermediate" | "advanced";
 export type FitnessGoalType = "strength" | "look_better" | "build_muscle" | "lose_fat" | "custom";
 
+export interface ProfileSchedule {
+  training_days_per_week?: number;
+  [key: string]: unknown;
+}
+
 export interface Profile {
   id: string;
   full_name: string | null;
-
-  fitness_level: FitnessLevel | null;
-  training_days_per_week: number | null;
-  fitness_goal_type: FitnessGoalType | null;
-  fitness_goal_custom: string | null;
+  goals: string | null;
+  experience_level: FitnessLevel | null;
+  schedule: ProfileSchedule | null;
+  equipment: string[] | null;
+  plan: string | null;
+  created_at?: string | null;
 }
 
 export interface Workout {

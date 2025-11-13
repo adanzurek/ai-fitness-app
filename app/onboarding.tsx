@@ -47,7 +47,7 @@ export default function OnboardingScreen() {
       console.log("Onboarding fetching profile for user", userId);
       const { data, error } = await supabase
         .from("profiles")
-        .select("id, fitness_level, training_days_per_week, fitness_goal_type, fitness_goal_custom")
+        .select("id, full_name, goals, experience_level, schedule, equipment, plan")
         .eq("id", userId)
         .maybeSingle();
 
@@ -68,12 +68,17 @@ export default function OnboardingScreen() {
   }, [loading, user, router]);
 
   useEffect(() => {
-    if (profileQuery.data && !hasPrefilled) {
-      setSelectedLevel(profileQuery.data.fitness_level ?? null);
-      setSelectedDays(profileQuery.data.training_days_per_week ?? null);
-      setSelectedGoal(profileQuery.data.fitness_goal_type ?? null);
-      if (profileQuery.data.fitness_goal_type === 'custom') {
-        setCustomGoal(profileQuery.data.fitness_goal_custom ?? "");
+    const profile = profileQuery.data;
+    if (profile && !hasPrefilled) {
+      setSelectedLevel((profile.experience_level as FitnessLevel | null) ?? null);
+      const scheduleDays = typeof profile.schedule?.training_days_per_week === 'number'
+        ? profile.schedule.training_days_per_week
+        : null;
+      setSelectedDays(scheduleDays);
+      const goalMatch = goalOptions.find((option) => option.label === profile.goals);
+      setSelectedGoal(goalMatch?.value ?? null);
+      if (goalMatch?.value === 'custom') {
+        setCustomGoal(profile.goals ?? "");
       } else {
         setCustomGoal("");
       }
@@ -109,13 +114,18 @@ export default function OnboardingScreen() {
         throw new Error('Supabase environment not configured');
       }
 
+      const resolvedGoal = selectedGoal === 'custom'
+        ? customGoal.trim()
+        : goalOptions.find((option) => option.value === selectedGoal)?.label ?? selectedGoal ?? null;
+
       const payload: Partial<Profile> & { id: string } = {
         id: user.id,
         full_name: typeof user.user_metadata?.full_name === 'string' ? user.user_metadata.full_name : user.email ?? null,
-        fitness_level: selectedLevel,
-        training_days_per_week: selectedDays,
-        fitness_goal_type: selectedGoal,
-        fitness_goal_custom: selectedGoal === 'custom' ? customGoal.trim() : null,
+        experience_level: selectedLevel,
+        goals: resolvedGoal,
+        schedule: selectedDays ? { training_days_per_week: selectedDays } : null,
+        equipment: null,
+        plan: null,
       };
 
       console.log('Onboarding submitting profile payload', payload);
