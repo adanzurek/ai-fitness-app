@@ -1,42 +1,94 @@
-import { useEffect, useState } from 'react';
+import { useMemo } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
-import { Workout } from '@/types/supabase';
+import { useSupabaseUser } from '@/hooks/useSupabaseUser';
 
-export function useMonthlyWorkouts({ year, month }: { year: number; month: number }) {
-  const [rows, setRows] = useState<Workout[]>([]);
-  const [loading, setLoading] = useState(true);
+export type CalendarWorkout = {
+  workout_id: string;
+  type: string | null;
+  notes: string | null;
+};
 
-  useEffect(() => {
-    const from = new Date(year, month - 1, 1).toISOString().slice(0, 10);
-    const to = new Date(year, month, 0).toISOString().slice(0, 10);
-    let alive = true;
+export type CalendarDay = {
+  date: string;
+  status: 'planned' | 'completed' | 'skipped';
+  workouts: CalendarWorkout[];
+};
 
-    (async () => {
-      setLoading(true);
+type MonthCalendarResponse = {
+  ok: boolean;
+  days: CalendarDay[];
+};
 
-      if (!isSupabaseConfigured) {
-        if (!alive) return;
-        setRows([]);
-        setLoading(false);
-        return;
-      }
+interface UseMonthlyWorkoutsParams {
+  year: number;
+  month: number; // 0-indexed
+}
 
-      const { data, error } = await supabase
-        .from('workouts')
-        .select('id, user_id, date, block, notes')
-        .gte('date', from)
-        .lte('date', to)
-        .order('date');
+export function useMonthlyWorkouts({ year, month }: UseMonthlyWorkoutsParams) {
+  const { user, loading: userLoading } = useSupabaseUser();
+  const userId = user?.id ?? null;
 
-      if (!alive) return;
-      setRows(error ? [] : (data ?? []));
-      setLoading(false);
-    })();
-
-    return () => {
-      alive = false;
-    };
+  const monthString = useMemo(() => {
+    const normalizedMonth = month + 1; // convert 0-indexed -> human readable
+    const formattedMonth = normalizedMonth.toString().padStart(2, '0');
+    return `${year}-${formattedMonth}`;
   }, [year, month]);
 
-  return { rows, loading };
+  const shouldFetch = isSupabaseConfigured && !!userId;
+
+  const { data, error, isFetching, isLoading, refetch } = useQuery<CalendarDay[], Error>({
+    queryKey: ['month_calendar', userId ?? 'anonymous', monthString],
+    enabled: shouldFetch,
+    staleTime: 1000 * 60,
+    queryFn: async () => {
+      if (!userId) {
+        console.warn('[useMonthlyWorkouts] Query attempted without authenticated user');
+        return [];
+      }
+
+      console.log(
+        `[useMonthlyWorkouts] invoking month_calendar for user ${userId} @ ${monthString}`
+      );
+
+      const { data: response, error: invokeError } = await supabase.functions.invoke<MonthCalendarResponse>(
+        'month_calendar',
+        {
+          body: {
+            user_id: userId,
+            month: monthString,
+          },
+        }
+      );
+
+      if (invokeError) {
+        console.error('[useMonthlyWorkouts] edge function error', invokeError);
+        throw invokeError;
+      }
+
+      if (!response) {
+        console.error('[useMonthlyWorkouts] edge function returned no response');
+        throw new Error('Unable to load workouts for this month');
+      }
+
+      if (response.ok === false) {
+        console.error('[useMonthlyWorkouts] edge function returned not ok', response);
+        throw new Error('Unable to load workouts for this month');
+      }
+
+      console.log(
+        `[useMonthlyWorkouts] received ${response.days?.length ?? 0} day entries for ${monthString}`
+      );
+
+      return response.days ?? [];
+    },
+  });
+
+  return {
+    days: data ?? [],
+    loading: userLoading || isFetching || isLoading,
+    error,
+    refetch,
+    monthString,
+  };
 }

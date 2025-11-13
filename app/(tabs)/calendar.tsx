@@ -6,21 +6,16 @@ import {
   TouchableOpacity,
   Platform,
 } from "react-native";
-import { useUpcomingWorkouts, useFitness } from "@/contexts/FitnessContext";
 import Colors from "@/constants/colors";
-import { useState, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { WorkoutType } from "@/types/fitness";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
 import MonthlyCalendar from "@/components/MonthlyCalendar";
 import WorkoutEditorSheet from "@/components/WorkoutEditorSheet";
+import { useMonthlyWorkouts } from "@/hooks/useMonthlyWorkouts";
 
-type WorkoutTypeColors = {
-  bg: string;
-  text: string;
-};
-
-function getWorkoutColors(type: WorkoutType): WorkoutTypeColors {
+function getWorkoutColors(type: WorkoutType | string | null) {
   switch (type) {
     case "Upper":
       return { bg: "rgba(239, 68, 68, 0.15)", text: "#DC2626" };
@@ -40,30 +35,38 @@ function getWorkoutColors(type: WorkoutType): WorkoutTypeColors {
 }
 
 export default function CalendarScreen() {
-  const { toggleExerciseComplete } = useFitness();
-  const upcomingWorkouts = useUpcomingWorkouts();
   const insets = useSafeAreaInsets();
-
-  const today = new Date();
-  const [selectedDate, setSelectedDate] = useState<string>(
-    today.toISOString().split("T")[0]
-  );
-  const [currentMonth] = useState<number>(today.getMonth());
-  const [currentYear] = useState<number>(today.getFullYear());
+  const [currentDate, setCurrentDate] = useState(() => {
+    const today = new Date();
+    return new Date(today.getFullYear(), today.getMonth(), 1);
+  });
+  const [selectedDate, setSelectedDate] = useState(() => new Date().toISOString().split("T")[0]);
   const [showEditor, setShowEditor] = useState(false);
   const [editingDate, setEditingDate] = useState<string>("");
 
-  const selectedWorkout = useMemo(() => {
-    return upcomingWorkouts.find((w) => w.date === selectedDate);
-  }, [upcomingWorkouts, selectedDate]);
+  const currentYear = currentDate.getFullYear();
+  const currentMonth = currentDate.getMonth();
 
-  const todayStr = today.toISOString().split("T")[0];
-  const isToday = selectedDate === todayStr;
+  const { days, loading, error } = useMonthlyWorkouts({ year: currentYear, month: currentMonth });
 
-  const handleEditWorkout = (dateISO: string) => {
-    setEditingDate(dateISO);
+  useEffect(() => {
+    setSelectedDate(new Date(currentYear, currentMonth, 1).toISOString().split("T")[0]);
+  }, [currentYear, currentMonth]);
+
+  const selectedDay = useMemo(() => days.find((day) => day.date === selectedDate), [days, selectedDate]);
+
+  const handleSelectDate = (dateISO: string) => {
     setSelectedDate(dateISO);
+    setEditingDate(dateISO);
     setShowEditor(true);
+  };
+
+  const changeMonth = (delta: number) => {
+    setCurrentDate((prev) => {
+      const next = new Date(prev);
+      next.setMonth(prev.getMonth() + delta);
+      return next;
+    });
   };
 
   return (
@@ -78,13 +81,24 @@ export default function CalendarScreen() {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 100 }]}
       >
+        <View style={styles.monthNav}>
+          <TouchableOpacity style={styles.monthNavButton} onPress={() => changeMonth(-1)}>
+            <Text style={styles.monthNavText}>Prev</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.monthNavButton} onPress={() => changeMonth(1)}>
+            <Text style={styles.monthNavText}>Next</Text>
+          </TouchableOpacity>
+        </View>
         <MonthlyCalendar
           year={currentYear}
           month={currentMonth}
-          onEdit={handleEditWorkout}
+          days={days}
+          loading={loading}
+          error={error}
+          onSelectDate={handleSelectDate}
         />
 
-        {selectedWorkout ? (
+        {selectedDay ? (
           <View style={styles.workoutCard}>
             <LinearGradient
               colors={["#FFFFFF", "#FEF2F2"]}
@@ -95,101 +109,46 @@ export default function CalendarScreen() {
               <View style={styles.workoutHeader}>
                 <View style={styles.workoutHeaderLeft}>
                   <Text style={styles.workoutDate}>
-                    {isToday
-                      ? "Today"
-                      : new Date(selectedDate).toLocaleDateString("en-US", {
-                          month: "short",
-                          day: "numeric",
-                        })}
+                    {new Date(selectedDate).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
                   </Text>
                   <View
-                    style={[
-                      styles.workoutTypePill,
-                      {
-                        backgroundColor: getWorkoutColors(selectedWorkout.type).bg,
-                      },
-                    ]}
+                    style={[styles.workoutTypePill, { backgroundColor: getWorkoutColors((selectedDay.workouts[0]?.type as WorkoutType) || "Rest").bg }]}
                   >
                     <Text
                       style={[
                         styles.workoutTypePillText,
-                        {
-                          color: getWorkoutColors(selectedWorkout.type).text,
-                        },
+                        { color: getWorkoutColors((selectedDay.workouts[0]?.type as WorkoutType) || "Rest").text },
                       ]}
                     >
-                      {selectedWorkout.type}
+                      {selectedDay.workouts[0]?.type ?? "Session"}
                     </Text>
                   </View>
                 </View>
               </View>
 
-              <Text style={styles.workoutTitle}>{selectedWorkout.title}</Text>
+              <Text style={styles.workoutTitle}>Scheduled Workouts</Text>
               <Text style={styles.workoutDescription}>
-                {selectedWorkout.description}
+                {selectedDay.workouts.length} session{selectedDay.workouts.length === 1 ? "" : "s"} planned for this day.
               </Text>
 
               <View style={styles.exercisesList}>
-                {selectedWorkout.exercises.map((exercise) => {
-                  const targetReps = exercise.reps;
-                  const targetLoad = exercise.weight
-                    ? `${exercise.weight} lbs`
-                    : "bodyweight";
-
-                  return (
-                    <View key={exercise.id} style={styles.setRow}>
-                      <View style={styles.setRowLeft}>
-                        <Text style={styles.exerciseName}>{exercise.name}</Text>
-                        <Text style={styles.setTarget}>
-                          Target: {targetReps} reps @ {targetLoad}
-                        </Text>
-                      </View>
-                      <View style={styles.setActions}>
-                        <TouchableOpacity
-                          style={[
-                            styles.actionButton,
-                            styles.actionButtonDone,
-                            exercise.completed && styles.actionButtonDoneActive,
-                          ]}
-                          onPress={() =>
-                            toggleExerciseComplete(selectedWorkout.id, exercise.id)
-                          }
-                          activeOpacity={0.7}
-                        >
-                          <Text
-                            style={[
-                              styles.actionButtonText,
-                              exercise.completed && styles.actionButtonTextActive,
-                            ]}
-                          >
-                            ✅
-                          </Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          style={[styles.actionButton, styles.actionButtonFail]}
-                          activeOpacity={0.7}
-                        >
-                          <Text style={styles.actionButtonText}>⚠️</Text>
-                        </TouchableOpacity>
-                      </View>
+                {selectedDay.workouts.map((workout) => (
+                  <View key={workout.workout_id} style={styles.setRow}>
+                    <View style={styles.setRowLeft}>
+                      <Text style={styles.exerciseName}>{workout.type ?? "Session"}</Text>
+                      {workout.notes ? (
+                        <Text style={styles.setTarget}>{workout.notes}</Text>
+                      ) : (
+                        <Text style={styles.setTarget}>No notes provided.</Text>
+                      )}
                     </View>
-                  );
-                })}
-              </View>
-
-              <View style={styles.workoutFooter}>
-                <View style={styles.progressPill}>
-                  <Text style={styles.progressPillText}>
-                    {selectedWorkout.exercises.filter((e) => e.completed).length} /{" "}
-                    {selectedWorkout.exercises.length} sets
-                  </Text>
-                </View>
-                <TouchableOpacity
-                  style={styles.completeButton}
-                  activeOpacity={0.8}
-                >
-                  <Text style={styles.completeButtonText}>Mark Workout Complete</Text>
-                </TouchableOpacity>
+                    <View style={styles.setActions}>
+                      <TouchableOpacity style={[styles.actionButton, styles.actionButtonDone]} activeOpacity={0.7}>
+                        <Text style={styles.actionButtonText}>🗓️</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                ))}
               </View>
             </LinearGradient>
           </View>
@@ -197,18 +156,12 @@ export default function CalendarScreen() {
           <View style={styles.restCard}>
             <Text style={styles.restEmoji}>✨</Text>
             <Text style={styles.restTitle}>Rest Day</Text>
-            <Text style={styles.restText}>
-              Recovery matters. Light walk or mobility work recommended.
-            </Text>
+            <Text style={styles.restText}>Recovery matters. Light walk or mobility work recommended.</Text>
           </View>
         )}
       </ScrollView>
 
-      <WorkoutEditorSheet
-        visible={showEditor}
-        dateISO={editingDate}
-        onClose={() => setShowEditor(false)}
-      />
+      <WorkoutEditorSheet visible={showEditor} dateISO={editingDate} onClose={() => setShowEditor(false)} />
     </View>
   );
 }
@@ -239,7 +192,22 @@ const styles = StyleSheet.create({
   scrollContent: {
     paddingHorizontal: 16,
   },
-
+  monthNav: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: 12,
+  },
+  monthNavButton: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  monthNavText: {
+    color: Colors.text,
+    fontWeight: "600" as const,
+  },
   workoutCard: {
     marginBottom: 12,
     borderRadius: 24,
@@ -337,44 +305,8 @@ const styles = StyleSheet.create({
   actionButtonDone: {
     backgroundColor: "#FFFFFF",
   },
-  actionButtonDoneActive: {
-    backgroundColor: "#10B981",
-    borderColor: "#10B981",
-  },
-  actionButtonFail: {
-    backgroundColor: "#FFFFFF",
-  },
   actionButtonText: {
     fontSize: 18,
-  },
-  actionButtonTextActive: {
-    fontSize: 18,
-  },
-  workoutFooter: {
-    gap: 12,
-  },
-  progressPill: {
-    backgroundColor: "rgba(0, 0, 0, 0.05)",
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 99,
-    alignItems: "center",
-  },
-  progressPillText: {
-    fontSize: 14,
-    fontWeight: "600" as const,
-    color: "#000",
-  },
-  completeButton: {
-    backgroundColor: "#000",
-    paddingVertical: 16,
-    borderRadius: 16,
-    alignItems: "center",
-  },
-  completeButtonText: {
-    fontSize: 16,
-    fontWeight: "700" as const,
-    color: "#FFFFFF",
   },
   restCard: {
     backgroundColor: Colors.cardBackground,

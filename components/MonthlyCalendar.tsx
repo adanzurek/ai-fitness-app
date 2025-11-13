@@ -1,6 +1,7 @@
+import { useMemo } from 'react';
 import { StyleSheet, Text, View, TouchableOpacity, Dimensions, ActivityIndicator } from 'react-native';
-import { useMonthlyWorkouts } from '@/hooks/useMonthlyWorkouts';
 import Colors from '@/constants/colors';
+import type { CalendarDay } from '@/hooks/useMonthlyWorkouts';
 
 const { width } = Dimensions.get('window');
 const CALENDAR_PADDING = 16;
@@ -58,17 +59,20 @@ function getDaysInMonth(year: number, month: number): Date[] {
 
 interface MonthlyCalendarProps {
   year: number;
-  month: number;
-  onEdit?: (dayISO: string) => void;
+  month: number; // 0-indexed
+  days: CalendarDay[];
+  loading: boolean;
+  error?: Error | null;
+  onSelectDate?: (dayISO: string) => void;
 }
 
-export default function MonthlyCalendar({ year, month, onEdit }: MonthlyCalendarProps) {
-  const { rows: workouts, loading } = useMonthlyWorkouts({ year, month });
-
-  const workoutsByDate: Record<string, { block: string }> = {};
-  workouts.forEach((w) => {
-    workoutsByDate[w.date] = { block: w.block };
-  });
+export default function MonthlyCalendar({ year, month, days, loading, error, onSelectDate }: MonthlyCalendarProps) {
+  const workoutsByDate = useMemo(() => (
+    days.reduce<Record<string, CalendarDay>>((acc, day) => {
+      acc[day.date] = day;
+      return acc;
+    }, {})
+  ), [days]);
 
   const calendarDays = getDaysInMonth(year, month);
   const today = new Date();
@@ -91,6 +95,11 @@ export default function MonthlyCalendar({ year, month, onEdit }: MonthlyCalendar
         </View>
       ) : (
         <>
+          {error && (
+            <View style={styles.errorBanner}>
+              <Text style={styles.errorText}>Couldn&apos;t load workouts for this month.</Text>
+            </View>
+          )}
           <View style={styles.weekdayRow}>
             {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day, i) => (
               <View key={i} style={[styles.weekdayCell, { width: DAY_SIZE }]}>
@@ -104,14 +113,15 @@ export default function MonthlyCalendar({ year, month, onEdit }: MonthlyCalendar
               const dateStr = date.toISOString().split('T')[0];
               const isCurrentMonth = date.getMonth() === month;
               const isTodayDate = dateStr === todayStr;
-              const workoutData = workoutsByDate[dateStr];
-              const colors = workoutData ? getWorkoutColors(workoutData.block) : null;
+              const dayData = workoutsByDate[dateStr];
+              const firstWorkoutType = dayData?.workouts?.[0]?.type ?? null;
+              const colors = firstWorkoutType ? getWorkoutColors(firstWorkoutType) : null;
 
               return (
                 <TouchableOpacity
                   key={index}
                   style={[styles.dayCell, { width: DAY_SIZE, height: DAY_SIZE }]}
-                  onPress={() => onEdit?.(dateStr)}
+                  onPress={() => onSelectDate?.(dateStr)}
                   activeOpacity={0.7}
                 >
                   <View
@@ -119,26 +129,36 @@ export default function MonthlyCalendar({ year, month, onEdit }: MonthlyCalendar
                       styles.dayInner,
                       !isCurrentMonth && styles.dayOutsideMonth,
                       isTodayDate && styles.dayToday,
-                      workoutData && colors && { backgroundColor: colors.bg },
+                      dayData && colors && { backgroundColor: colors.bg },
                     ]}
                   >
                     <Text
                       style={[
                         styles.dayNumber,
                         !isCurrentMonth && styles.dayNumberOutside,
-                        (isTodayDate || workoutData) && styles.dayNumberActive,
-                        workoutData && colors && { color: colors.text },
+                        (isTodayDate || dayData) && styles.dayNumberActive,
+                        dayData && colors && { color: colors.text },
                       ]}
                     >
                       {date.getDate()}
                     </Text>
-                    {workoutData && (
-                      <Text
-                        style={[styles.workoutTypeLabel, colors && { color: colors.text }]}
-                        numberOfLines={1}
-                      >
-                        {workoutData.block}
-                      </Text>
+                    {dayData && dayData.workouts.length > 0 && (
+                      <View style={styles.workoutBadgeContainer}>
+                        {dayData.workouts.slice(0, 2).map((workout) => (
+                          <Text
+                            key={workout.workout_id}
+                            style={[styles.workoutTypeLabel, colors && { color: colors.text }]}
+                            numberOfLines={1}
+                          >
+                            {workout.type ?? 'Session'}
+                          </Text>
+                        ))}
+                        {dayData.workouts.length > 2 && (
+                          <Text style={[styles.workoutTypeLabel, colors && { color: colors.text }]}>+
+                            {dayData.workouts.length - 2}
+                          </Text>
+                        )}
+                      </View>
                     )}
                   </View>
                 </TouchableOpacity>
@@ -147,12 +167,12 @@ export default function MonthlyCalendar({ year, month, onEdit }: MonthlyCalendar
           </View>
 
           <View style={styles.legend}>
-            {['Upper', 'Lower', 'Push', 'Pull', 'Legs', 'Rest'].map((type) => {
-              const colors = getWorkoutColors(type);
-              return (
-                <View key={type} style={styles.legendItem}>
-                  <View style={[styles.legendDot, { backgroundColor: colors.text }]} />
-                  <Text style={styles.legendText}>{type}</Text>
+                {['Upper', 'Lower', 'Push', 'Pull', 'Legs', 'Rest'].map((type) => {
+                  const colors = getWorkoutColors(type);
+                  return (
+                    <View key={type} style={styles.legendItem}>
+                      <View style={[styles.legendDot, { backgroundColor: colors.text }]} />
+                      <Text style={styles.legendText}>{type}</Text>
                 </View>
               );
             })}
@@ -185,6 +205,16 @@ const styles = StyleSheet.create({
   loadingContainer: {
     paddingVertical: 60,
     alignItems: 'center',
+  },
+  errorBanner: {
+    backgroundColor: '#3b1f1f',
+    padding: 10,
+    borderRadius: 12,
+    marginBottom: 12,
+  },
+  errorText: {
+    color: '#ffb4b4',
+    fontSize: 13,
   },
   weekdayRow: {
     flexDirection: 'row',
@@ -232,6 +262,10 @@ const styles = StyleSheet.create({
   dayNumberActive: {
     color: Colors.text,
     fontWeight: '700' as const,
+  },
+  workoutBadgeContainer: {
+    alignItems: 'center',
+    gap: 2,
   },
   workoutTypeLabel: {
     fontSize: 9,

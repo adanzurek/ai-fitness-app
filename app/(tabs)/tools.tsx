@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -13,6 +13,7 @@ import {
 import Colors from "@/constants/colors";
 import { supabase, isSupabaseConfigured } from "@/lib/supabase";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useQueryClient } from "@tanstack/react-query";
 
 type FunctionTemplateKey = keyof typeof FUNCTION_TEMPLATES;
 
@@ -46,11 +47,14 @@ const FUNCTION_TEMPLATES = {
     ),
   month_calendar: (userId: string) =>
     JSON.stringify(
-      {
-        user_id: userId,
-        year: new Date().getFullYear(),
-        month: new Date().getMonth() + 1,
-      },
+      (() => {
+        const now = new Date();
+        const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+        return {
+          user_id: userId,
+          month,
+        };
+      })(),
       null,
       2,
     ),
@@ -123,6 +127,7 @@ type ToolLog = {
 
 export default function ToolsScreen() {
   const insets = useSafeAreaInsets();
+  const queryClient = useQueryClient();
   const [functionName, setFunctionName] = useState<FunctionTemplateKey>("compose_today");
   const [userId, setUserId] = useState("00000000-0000-0000-0000-000000000000");
   const [payloadText, setPayloadText] = useState(FUNCTION_TEMPLATES.compose_today(userId));
@@ -165,6 +170,9 @@ export default function ToolsScreen() {
         body: parsedPayload,
       });
 
+      if (!error) {
+        refreshClientCache(functionName);
+      }
       const response = error ? error.message : JSON.stringify(data, null, 2);
       setLogs((prev) => [
         {
@@ -192,6 +200,21 @@ export default function ToolsScreen() {
       ]);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const refreshClientCache = (fnName: FunctionTemplateKey) => {
+    const invalidatesCalendar = [
+      "generate_week",
+      "month_calendar",
+      "set_outcome",
+      "compose_today",
+      "generate_plan_ai",
+      "apply_program",
+    ];
+
+    if (invalidatesCalendar.includes(fnName)) {
+      queryClient.invalidateQueries({ queryKey: ["month_calendar"], exact: false }).catch(() => undefined);
     }
   };
 

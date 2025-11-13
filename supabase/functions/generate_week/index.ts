@@ -3,7 +3,8 @@
 // Deno-compatible. When type-checking locally (tsc --noEmit) we rely on @ts-nocheck
 // and the npm supabase client to avoid missing-module errors. During deploy the
 // Deno runtime will resolve `jsr:@supabase/supabase-js@2` automatically.
-import { createClient } from "@supabase/supabase-js";
+// @ts-ignore - jsr imports aren't recognized by tsc locally
+import { createClient } from "jsr:@supabase/supabase-js@2";
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type"
