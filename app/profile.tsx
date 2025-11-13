@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -7,23 +7,298 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import { Image } from "expo-image";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { LogOut, ArrowLeft, User as UserIcon } from "lucide-react-native";
+import { LogOut, ArrowLeft, User as UserIcon, ChevronDown, ChevronUp, Check } from "lucide-react-native";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Colors from "@/constants/colors";
 import { useSupabaseUser } from "@/hooks/useSupabaseUser";
-import { supabase } from "@/lib/supabase";
+import { useFitness } from "@/contexts/FitnessContext";
+import { supabase, isSupabaseConfigured } from "@/lib/supabase";
 import { setSkipAuth } from "@/lib/authSkip";
+import { fitnessLevelOptions, goalOptions, trainingDayOptions } from "@/constants/profilePreferences";
+import type { FitnessGoalType, FitnessLevel, Profile } from "@/types/supabase";
+
+type PreferenceField = "level" | "days" | "goal" | null;
+
+type PreferenceState = {
+  level: FitnessLevel | null;
+  days: number | null;
+  goalType: FitnessGoalType | null;
+  goalCustom: string;
+};
+
+type PreferenceMutationResult = {
+  payload: Profile | null;
+  state: PreferenceState;
+};
 
 export default function ProfileScreen() {
   const router = useRouter();
   const { user } = useSupabaseUser();
+  const { userProfile, updateUserProfile } = useFitness();
   const insets = useSafeAreaInsets();
+  const queryClient = useQueryClient();
   const [signingOut, setSigningOut] = useState<boolean>(false);
+  const [activeField, setActiveField] = useState<PreferenceField>(null);
+  const [selectedLevel, setSelectedLevel] = useState<FitnessLevel | null>(null);
+  const [selectedDays, setSelectedDays] = useState<number | null>(null);
+  const [selectedGoal, setSelectedGoal] = useState<FitnessGoalType | null>(null);
+  const [customGoal, setCustomGoal] = useState<string>("");
+  const [goalDraft, setGoalDraft] = useState<string>("");
+  const [hasInitializedPreferences, setHasInitializedPreferences] = useState<boolean>(false);
+
+  const profileQuery = useQuery<Profile | null>({
+    queryKey: ["profile", user?.id ?? null],
+    enabled: Boolean(user) && isSupabaseConfigured,
+    staleTime: 5 * 60 * 1000,
+    queryFn: async ({ queryKey }) => {
+      const [, userId] = queryKey as [string, string | null];
+      if (!userId) {
+        console.log("Profile preferences query skipped: no user");
+        return null;
+      }
+      console.log("Profile fetching preferences for user", userId);
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("id, full_name, goals, experience_level, schedule, equipment, plan")
+        .eq("id", userId)
+        .maybeSingle();
+      if (error) {
+        console.error("Profile preferences query error", error);
+        throw error;
+      }
+      return (data as Profile | null) ?? null;
+    },
+  });
+
+  const applySupabaseProfile = useCallback((profile: Profile) => {
+    const level = (profile.experience_level as FitnessLevel | null) ?? null;
+    const days = typeof profile.schedule?.training_days_per_week === "number"
+      ? profile.schedule.training_days_per_week
+      : null;
+    const goalString = typeof profile.goals === "string" ? profile.goals : null;
+    const goalMatch = goalOptions.find((option) => option.label === goalString);
+    if (goalMatch) {
+      setSelectedGoal(goalMatch.value);
+      if (goalMatch.value === "custom") {
+        const resolved = goalString ?? "";
+        setCustomGoal(resolved);
+        setGoalDraft(resolved);
+      } else {
+        setCustomGoal("");
+        setGoalDraft("");
+      }
+    } else if (goalString && goalString.length > 0) {
+      setSelectedGoal("custom");
+      setCustomGoal(goalString);
+      setGoalDraft(goalString);
+    } else {
+      setSelectedGoal(null);
+      setCustomGoal("");
+      setGoalDraft("");
+    }
+    setSelectedLevel(level);
+    setSelectedDays(days);
+  }, []);
+
+  const initializeFromContext = useCallback(() => {
+    const level = userProfile.fitnessLevel;
+    const days = userProfile.trainingDaysPerWeek;
+    const goalType = userProfile.primaryGoalType;
+    const custom = goalType === "custom" ? userProfile.primaryGoalCustom ?? "" : "";
+    setSelectedLevel(level);
+    setSelectedDays(days);
+    setSelectedGoal(goalType);
+    setCustomGoal(custom);
+    setGoalDraft(custom);
+  }, [userProfile]);
+
+  useEffect(() => {
+    if (profileQuery.data && !hasInitializedPreferences) {
+      console.log("Profile applying supabase preferences");
+      applySupabaseProfile(profileQuery.data);
+      setHasInitializedPreferences(true);
+      return;
+    }
+    if (!hasInitializedPreferences && (!isSupabaseConfigured || (profileQuery.isFetched && !profileQuery.data))) {
+      console.log("Profile initializing preferences from context");
+      initializeFromContext();
+      setHasInitializedPreferences(true);
+    }
+  }, [profileQuery.data, profileQuery.isFetched, hasInitializedPreferences, applySupabaseProfile, initializeFromContext]);
+
+  const preferenceMutation = useMutation<PreferenceMutationResult, unknown, PreferenceState>({
+    mutationFn: async (state) => {
+      if (!user) {
+        throw new Error("Missing authenticated user");
+      }
+      const sanitizedState: PreferenceState = {
+        level: state.level,
+        days: state.days,
+        goalType: state.goalType,
+        goalCustom: state.goalType === "custom" ? state.goalCustom.trim() : "",
+      };
+      if (!isSupabaseConfigured) {
+        console.log("Profile storing preferences locally");
+        return { payload: null, state: sanitizedState };
+      }
+      const goalValue = sanitizedState.goalType === "custom"
+        ? sanitizedState.goalCustom
+        : goalOptions.find((option) => option.value === sanitizedState.goalType)?.label ?? sanitizedState.goalType ?? null;
+      const payload: Partial<Profile> & { id: string } = {
+        id: user.id,
+        experience_level: sanitizedState.level,
+        goals: goalValue,
+        schedule: sanitizedState.days ? { training_days_per_week: sanitizedState.days } : null,
+        equipment: null,
+        plan: null,
+      };
+      console.log("Profile upserting preference payload", payload);
+      const { data, error } = await supabase
+        .from("profiles")
+        .upsert(payload, { onConflict: "id" })
+        .select("id, full_name, goals, experience_level, schedule, equipment, plan")
+        .maybeSingle();
+      if (error) {
+        console.error("Profile preference upsert error", error);
+        throw error;
+      }
+      return { payload: (data as Profile | null) ?? null, state: sanitizedState };
+    },
+    onSuccess: async (result) => {
+      if (user && isSupabaseConfigured) {
+        await queryClient.invalidateQueries({ queryKey: ["profile", user.id] });
+      }
+      const resolvedState = result.state;
+      const trimmedCustom = resolvedState.goalType === "custom" ? resolvedState.goalCustom.trim() : "";
+      const nextProfile = {
+        ...userProfile,
+        fitnessLevel: resolvedState.level,
+        trainingDaysPerWeek: resolvedState.days,
+        primaryGoalType: resolvedState.goalType,
+        primaryGoalCustom: resolvedState.goalType === "custom" ? trimmedCustom || null : null,
+      };
+      updateUserProfile(nextProfile);
+      setSelectedLevel(resolvedState.level);
+      setSelectedDays(resolvedState.days);
+      setSelectedGoal(resolvedState.goalType);
+      if (resolvedState.goalType === "custom") {
+        setCustomGoal(trimmedCustom);
+        setGoalDraft(trimmedCustom);
+      } else {
+        setCustomGoal("");
+        setGoalDraft("");
+      }
+      console.log("Profile preferences updated", result.payload ? "profile synced" : "local only");
+    },
+    onError: (error) => {
+      console.error("Profile preferences update failed", error);
+      const message = error instanceof Error ? error.message : "Unable to update preferences. Please try again.";
+      Alert.alert("Profile", message);
+    },
+  });
+
+  const toggleField = (field: PreferenceField) => {
+    setActiveField((prev) => (prev === field ? null : field));
+  };
+
+  const submitPreferences = (state: PreferenceState) => {
+    console.log("Profile submitting preferences", state);
+    preferenceMutation.mutate(state);
+  };
+
+  const handleSelectLevel = (value: FitnessLevel) => {
+    if (selectedLevel === value) {
+      toggleField(null);
+      return;
+    }
+    toggleField(null);
+    submitPreferences({
+      level: value,
+      days: selectedDays,
+      goalType: selectedGoal,
+      goalCustom: selectedGoal === "custom" ? goalDraft : "",
+    });
+  };
+
+  const handleSelectDays = (value: number) => {
+    if (selectedDays === value) {
+      toggleField(null);
+      return;
+    }
+    submitPreferences({
+      level: selectedLevel,
+      days: value,
+      goalType: selectedGoal,
+      goalCustom: selectedGoal === "custom" ? goalDraft : "",
+    });
+  };
+
+  const handleSelectGoal = (value: FitnessGoalType) => {
+    setSelectedGoal(value);
+    if (value === "custom") {
+      toggleField("goal");
+      const initialDraft = customGoal.length > 0 ? customGoal : goalDraft;
+      setGoalDraft(initialDraft);
+      return;
+    }
+    toggleField(null);
+    submitPreferences({
+      level: selectedLevel,
+      days: selectedDays,
+      goalType: value,
+      goalCustom: "",
+    });
+  };
+
+  const handleSaveCustomGoal = () => {
+    const trimmed = goalDraft.trim();
+    if (trimmed.length === 0) {
+      Alert.alert("Custom goal", "Add a description before saving.");
+      return;
+    }
+    submitPreferences({
+      level: selectedLevel,
+      days: selectedDays,
+      goalType: "custom",
+      goalCustom: trimmed,
+    });
+    toggleField(null);
+  };
+
+  const levelLabel = useMemo(() => {
+    if (!selectedLevel) {
+      return "Select level";
+    }
+    const match = fitnessLevelOptions.find((option) => option.value === selectedLevel);
+    return match?.label ?? "Select level";
+  }, [selectedLevel]);
+
+  const daysLabel = useMemo(() => {
+    if (!selectedDays) {
+      return "Select days";
+    }
+    return `${selectedDays} day${selectedDays > 1 ? "s" : ""} / week`;
+  }, [selectedDays]);
+
+  const goalLabel = useMemo(() => {
+    if (!selectedGoal) {
+      return "Select goal";
+    }
+    if (selectedGoal === "custom") {
+      return customGoal.length > 0 ? customGoal : "Custom goal";
+    }
+    const match = goalOptions.find((option) => option.value === selectedGoal);
+    return match?.label ?? "Select goal";
+  }, [selectedGoal, customGoal]);
+
+  const preferencesLoading = !hasInitializedPreferences && profileQuery.isLoading;
 
   const avatarUrl = useMemo(() => {
     const metadataUrl = user?.user_metadata?.avatar_url;
@@ -148,6 +423,214 @@ export default function ProfileScreen() {
             </Text>
           ) : (
             <Text style={styles.providerText}>Provider: GUEST</Text>
+          )}
+        </View>
+
+        <View
+          style={[styles.section, styles.preferenceSection]}
+          testID="profile-preferences-card"
+        >
+          <View style={styles.preferenceHeaderRow}>
+            <Text style={styles.sectionTitle}>Training Preferences</Text>
+            {preferenceMutation.isPending && (
+              <View style={styles.savingBadge} testID="profile-preferences-saving">
+                <ActivityIndicator size="small" color={Colors.text} />
+                <Text style={styles.savingBadgeText}>Saving</Text>
+              </View>
+            )}
+          </View>
+          <Text style={styles.sectionBody}>
+            Keep your plan dialed in. Update levels, volume, and goals anytime.
+          </Text>
+          {preferencesLoading ? (
+            <View style={styles.preferenceLoading} testID="profile-preferences-loading">
+              <ActivityIndicator color={Colors.primary} />
+              <Text style={styles.preferenceLoadingText}>Loading preferences...</Text>
+            </View>
+          ) : (
+            <View style={styles.preferenceList}>
+              <View style={styles.preferenceCard}>
+                <Pressable
+                  onPress={() => toggleField("level")}
+                  style={({ pressed }) => [
+                    styles.preferencePressable,
+                    pressed && styles.preferencePressablePressed,
+                  ]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Change experience level"
+                  testID="profile-preference-level"
+                >
+                  <Text style={styles.preferenceLabel}>Experience level</Text>
+                  <View style={styles.preferenceValueRow}>
+                    <Text style={styles.preferenceValue}>{levelLabel}</Text>
+                    {activeField === "level" ? (
+                      <ChevronUp color={Colors.textSecondary} size={18} />
+                    ) : (
+                      <ChevronDown color={Colors.textSecondary} size={18} />
+                    )}
+                  </View>
+                </Pressable>
+                {activeField === "level" && (
+                  <View style={styles.dropdown} testID="profile-level-dropdown">
+                    {fitnessLevelOptions.map((option) => {
+                      const isSelected = selectedLevel === option.value;
+                      return (
+                        <Pressable
+                          key={option.value}
+                          onPress={() => handleSelectLevel(option.value)}
+                          style={({ pressed }) => [
+                            styles.dropdownOption,
+                            isSelected && styles.dropdownOptionSelected,
+                            pressed && styles.dropdownOptionPressed,
+                          ]}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Set experience level to ${option.label}`}
+                          testID={`profile-level-option-${option.value}`}
+                        >
+                          <View style={styles.dropdownOptionRow}>
+                            <Text style={styles.dropdownOptionLabel}>{option.label}</Text>
+                            {isSelected && <Check color={Colors.primary} size={18} />}
+                          </View>
+                          <Text style={styles.dropdownDescription}>{option.description}</Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                )}
+              </View>
+
+              <View style={styles.preferenceCard}>
+                <Pressable
+                  onPress={() => toggleField("days")}
+                  style={({ pressed }) => [
+                    styles.preferencePressable,
+                    pressed && styles.preferencePressablePressed,
+                  ]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Change training days per week"
+                  testID="profile-preference-days"
+                >
+                  <Text style={styles.preferenceLabel}>Training days per week</Text>
+                  <View style={styles.preferenceValueRow}>
+                    <Text style={styles.preferenceValue}>{daysLabel}</Text>
+                    {activeField === "days" ? (
+                      <ChevronUp color={Colors.textSecondary} size={18} />
+                    ) : (
+                      <ChevronDown color={Colors.textSecondary} size={18} />
+                    )}
+                  </View>
+                </Pressable>
+                {activeField === "days" && (
+                  <View style={styles.dropdown} testID="profile-days-dropdown">
+                    <View style={styles.chipRow}>
+                      {trainingDayOptions.map((day) => {
+                        const isSelected = selectedDays === day;
+                        return (
+                          <Pressable
+                            key={day}
+                            onPress={() => handleSelectDays(day)}
+                            style={({ pressed }) => [
+                              styles.preferenceChip,
+                              isSelected && styles.preferenceChipSelected,
+                              pressed && styles.preferenceChipPressed,
+                            ]}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Train ${day} days each week`}
+                            testID={`profile-day-option-${day}`}
+                          >
+                            <Text style={styles.preferenceChipText}>{day}</Text>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                  </View>
+                )}
+              </View>
+
+              <View style={styles.preferenceCard}>
+                <Pressable
+                  onPress={() => toggleField("goal")}
+                  style={({ pressed }) => [
+                    styles.preferencePressable,
+                    pressed && styles.preferencePressablePressed,
+                  ]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Change primary goal"
+                  testID="profile-preference-goal"
+                >
+                  <Text style={styles.preferenceLabel}>Primary goal</Text>
+                  <View style={styles.preferenceValueRow}>
+                    <Text style={styles.preferenceValue} numberOfLines={1}>
+                      {goalLabel}
+                    </Text>
+                    {activeField === "goal" ? (
+                      <ChevronUp color={Colors.textSecondary} size={18} />
+                    ) : (
+                      <ChevronDown color={Colors.textSecondary} size={18} />
+                    )}
+                  </View>
+                </Pressable>
+                {activeField === "goal" && (
+                  <View style={styles.dropdown} testID="profile-goal-dropdown">
+                    {goalOptions.map((option) => {
+                      const isSelected = selectedGoal === option.value;
+                      return (
+                        <Pressable
+                          key={option.value}
+                          onPress={() => handleSelectGoal(option.value)}
+                          style={({ pressed }) => [
+                            styles.dropdownOption,
+                            isSelected && styles.dropdownOptionSelected,
+                            pressed && styles.dropdownOptionPressed,
+                          ]}
+                          accessibilityRole="button"
+                          accessibilityLabel={`Set goal to ${option.label}`}
+                          testID={`profile-goal-option-${option.value}`}
+                        >
+                          <View style={styles.dropdownOptionRow}>
+                            <Text style={styles.dropdownOptionLabel}>{option.label}</Text>
+                            {isSelected && <Check color={Colors.primary} size={18} />}
+                          </View>
+                          <Text style={styles.dropdownDescription}>{option.blurb}</Text>
+                        </Pressable>
+                      );
+                    })}
+                    {selectedGoal === "custom" && (
+                      <View style={styles.customGoalEditor} testID="profile-custom-goal-editor">
+                        <Text style={styles.customGoalLabel}>Custom goal</Text>
+                        <TextInput
+                          style={styles.customGoalInput}
+                          value={goalDraft}
+                          onChangeText={setGoalDraft}
+                          multiline
+                          placeholder="Describe what you're training for..."
+                          placeholderTextColor={Colors.textMuted}
+                          testID="profile-custom-goal-input"
+                        />
+                        <Pressable
+                          onPress={handleSaveCustomGoal}
+                          disabled={preferenceMutation.isPending || goalDraft.trim().length === 0}
+                          style={({ pressed }) => [
+                            styles.saveButton,
+                            (preferenceMutation.isPending || goalDraft.trim().length === 0) && styles.saveButtonDisabled,
+                            pressed && !(preferenceMutation.isPending || goalDraft.trim().length === 0) && styles.saveButtonPressed,
+                          ]}
+                          accessibilityRole="button"
+                          accessibilityLabel="Save custom goal"
+                          testID="profile-custom-goal-save"
+                        >
+                          {preferenceMutation.isPending ? (
+                            <ActivityIndicator color={Colors.text} />
+                          ) : (
+                            <Text style={styles.saveButtonText}>Save goal</Text>
+                          )}
+                        </Pressable>
+                      </View>
+                    )}
+                  </View>
+                )}
+              </View>
+            </View>
           )}
         </View>
 
@@ -324,6 +807,185 @@ const styles = StyleSheet.create({
   signOutText: {
     fontSize: 16,
     fontWeight: "600" as const,
+    color: Colors.text,
+  },
+  preferenceSection: {
+    gap: 24,
+  },
+  preferenceHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  savingBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: "#1F0B0B",
+  },
+  savingBadgeText: {
+    fontSize: 12,
+    fontWeight: "600" as const,
+    color: Colors.text,
+  },
+  preferenceLoading: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 12,
+  },
+  preferenceLoadingText: {
+    fontSize: 14,
+    color: Colors.textSecondary,
+  },
+  preferenceList: {
+    gap: 18,
+  },
+  preferenceCard: {
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: "#141414",
+    overflow: "hidden",
+  },
+  preferencePressable: {
+    paddingVertical: 18,
+    paddingHorizontal: 20,
+    gap: 12,
+    backgroundColor: "#141414",
+  },
+  preferencePressablePressed: {
+    backgroundColor: "#1B1B1B",
+  },
+  preferenceLabel: {
+    fontSize: 14,
+    fontWeight: "600" as const,
+    color: Colors.textSecondary,
+    textTransform: "uppercase",
+    letterSpacing: 1,
+  },
+  preferenceValueRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  preferenceValue: {
+    fontSize: 18,
+    fontWeight: "700" as const,
+    color: Colors.text,
+    flexShrink: 1,
+  },
+  dropdown: {
+    paddingHorizontal: 20,
+    paddingBottom: 20,
+    gap: 12,
+    backgroundColor: "#101010",
+    borderTopWidth: 1,
+    borderColor: Colors.border,
+  },
+  dropdownOption: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: "#161616",
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    gap: 8,
+  },
+  dropdownOptionSelected: {
+    borderColor: Colors.primary,
+    backgroundColor: "#1F0B0B",
+  },
+  dropdownOptionPressed: {
+    backgroundColor: "#1C1C1C",
+  },
+  dropdownOptionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  dropdownOptionLabel: {
+    fontSize: 16,
+    fontWeight: "600" as const,
+    color: Colors.text,
+  },
+  dropdownDescription: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: Colors.textSecondary,
+  },
+  chipRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+  },
+  preferenceChip: {
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: "#151515",
+  },
+  preferenceChipSelected: {
+    borderColor: Colors.primary,
+    backgroundColor: "#1F0B0B",
+  },
+  preferenceChipPressed: {
+    transform: [{ scale: 0.95 }],
+  },
+  preferenceChipText: {
+    fontSize: 16,
+    fontWeight: "700" as const,
+    color: Colors.text,
+  },
+  customGoalEditor: {
+    marginTop: 12,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: "#141414",
+    padding: 16,
+    gap: 12,
+  },
+  customGoalLabel: {
+    fontSize: 14,
+    fontWeight: "600" as const,
+    color: Colors.text,
+  },
+  customGoalInput: {
+    minHeight: 88,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: "#0C0C0C",
+    padding: 12,
+    fontSize: 16,
+    color: Colors.text,
+    textAlignVertical: "top",
+  },
+  saveButton: {
+    borderRadius: 16,
+    paddingVertical: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: Colors.primary,
+  },
+  saveButtonDisabled: {
+    opacity: 0.5,
+  },
+  saveButtonPressed: {
+    backgroundColor: Colors.primaryDark,
+  },
+  saveButtonText: {
+    fontSize: 16,
+    fontWeight: "700" as const,
     color: Colors.text,
   },
 });

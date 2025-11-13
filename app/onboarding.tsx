@@ -17,6 +17,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Circle } from "lucide-react-native";
 import Colors from "@/constants/colors";
 import { useSupabaseUser } from "@/hooks/useSupabaseUser";
+import { useFitness } from "@/contexts/FitnessContext";
 import { supabase, isSupabaseConfigured } from "@/lib/supabase";
 import type { FitnessGoalType, FitnessLevel, Profile } from "@/types/supabase";
 import { fitnessLevelOptions, goalOptions, trainingDayOptions } from "@/constants/profilePreferences";
@@ -24,6 +25,7 @@ import { fitnessLevelOptions, goalOptions, trainingDayOptions } from "@/constant
 export default function OnboardingScreen() {
   const router = useRouter();
   const { user, loading } = useSupabaseUser();
+  const { updateUserProfile, userProfile } = useFitness();
   const insets = useSafeAreaInsets();
   const queryClient = useQueryClient();
   const [selectedLevel, setSelectedLevel] = useState<FitnessLevel | null>(null);
@@ -76,10 +78,14 @@ export default function OnboardingScreen() {
         : null;
       setSelectedDays(scheduleDays);
       const goalMatch = goalOptions.find((option) => option.label === profile.goals);
-      setSelectedGoal(goalMatch?.value ?? null);
-      if (goalMatch?.value === 'custom') {
-        setCustomGoal(profile.goals ?? "");
+      if (goalMatch) {
+        setSelectedGoal(goalMatch.value);
+        setCustomGoal(goalMatch.value === 'custom' ? profile.goals ?? "" : "");
+      } else if (typeof profile.goals === 'string' && profile.goals.length > 0) {
+        setSelectedGoal('custom');
+        setCustomGoal(profile.goals);
       } else {
+        setSelectedGoal(null);
         setCustomGoal("");
       }
       setHasPrefilled(true);
@@ -114,8 +120,9 @@ export default function OnboardingScreen() {
         throw new Error('Supabase environment not configured');
       }
 
+      const trimmedCustom = customGoal.trim();
       const resolvedGoal = selectedGoal === 'custom'
-        ? customGoal.trim()
+        ? trimmedCustom
         : goalOptions.find((option) => option.value === selectedGoal)?.label ?? selectedGoal ?? null;
 
       const payload: Partial<Profile> & { id: string } = {
@@ -129,19 +136,28 @@ export default function OnboardingScreen() {
       };
 
       console.log('Onboarding submitting profile payload', payload);
-      const { error } = await supabase.from('profiles').upsert(payload, { onConflict: 'id' });
+      const { data, error } = await supabase.from('profiles').upsert(payload, { onConflict: 'id' }).select('id, full_name, goals, experience_level, schedule, equipment, plan').maybeSingle();
       if (error) {
         console.error('Onboarding upsert error', error);
         throw error;
       }
 
-      return payload;
+      return data as Profile | null;
     },
-    onSuccess: async (_data, _variables, _context) => {
+    onSuccess: async (data) => {
       if (user) {
         await queryClient.invalidateQueries({ queryKey: ["profile", user.id] });
       }
-      console.log('Onboarding upsert success directing to tabs');
+      const primaryGoalType = selectedGoal;
+      const nextProfile = {
+        ...userProfile,
+        fitnessLevel: selectedLevel,
+        trainingDaysPerWeek: selectedDays,
+        primaryGoalType,
+        primaryGoalCustom: primaryGoalType === 'custom' ? customGoal.trim() || null : null,
+      };
+      updateUserProfile(nextProfile);
+      console.log('Onboarding upsert success directing to tabs', data ? 'profile returned' : 'no profile returned');
       router.replace('/(tabs)');
     },
     onError: (error: unknown) => {
