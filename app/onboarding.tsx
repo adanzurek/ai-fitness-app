@@ -19,22 +19,7 @@ import Colors from "@/constants/colors";
 import { useSupabaseUser } from "@/hooks/useSupabaseUser";
 import { supabase, isSupabaseConfigured } from "@/lib/supabase";
 import type { FitnessGoalType, FitnessLevel, Profile } from "@/types/supabase";
-
-const fitnessLevels: { label: string; value: FitnessLevel; description: string }[] = [
-  { label: "Beginner", value: "beginner", description: "0-1 years of consistent training" },
-  { label: "Intermediate", value: "intermediate", description: "1-3 years pushing for progress" },
-  { label: "Advanced", value: "advanced", description: "3+ years, chasing performance" },
-];
-
-const trainingDayOptions: number[] = [2, 3, 4, 5, 6, 7];
-
-const goalOptions: { label: string; value: FitnessGoalType; blurb: string }[] = [
-  { label: "Strength", value: "strength", blurb: "Hit new PRs and power numbers" },
-  { label: "Look Better", value: "look_better", blurb: "Dial in aesthetics and definition" },
-  { label: "Build Muscle", value: "build_muscle", blurb: "Pack on lean size strategically" },
-  { label: "Lose Fat", value: "lose_fat", blurb: "Trim down while staying strong" },
-  { label: "Custom Goal", value: "custom", blurb: "Define your own mission" },
-];
+import { fitnessLevelOptions, goalOptions, trainingDayOptions } from "@/constants/profilePreferences";
 
 export default function OnboardingScreen() {
   const router = useRouter();
@@ -207,7 +192,7 @@ export default function OnboardingScreen() {
           <View style={styles.section} testID="onboarding-fitness-level">
             <Text style={styles.sectionLabel}>Fitness Level</Text>
             <View style={styles.cardGrid}>
-              {fitnessLevels.map((option) => {
+              {fitnessLevelOptions.map((option) => {
                 const selected = selectedLevel === option.value;
                 return (
                   <Pressable

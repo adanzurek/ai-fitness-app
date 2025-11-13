@@ -19,6 +19,24 @@ const defaultUserProfile: UserProfile = {
     { id: "3", exercise: "Deadlift", current: 275, target: 405, unit: "lbs" },
   ],
   streak: 7,
+  lastWorkoutDate: undefined,
+  fitnessLevel: null,
+  trainingDaysPerWeek: null,
+  primaryGoalType: null,
+  primaryGoalCustom: null,
+};
+
+const sanitizeUserProfileValue = (input: unknown): UserProfile => {
+  if (!input || typeof input !== "object") {
+    return defaultUserProfile;
+  }
+  const candidate = input as Partial<UserProfile>;
+  const goals = Array.isArray(candidate.goals) ? candidate.goals : defaultUserProfile.goals;
+  return {
+    ...defaultUserProfile,
+    ...candidate,
+    goals,
+  };
 };
 
 export const [FitnessContext, useFitness] = createContextHook(() => {
@@ -30,7 +48,7 @@ export const [FitnessContext, useFitness] = createContextHook(() => {
     queryKey: ["userProfile"],
     queryFn: async () => {
       const stored = await AsyncStorage.getItem(STORAGE_KEYS.USER_PROFILE);
-      return stored ? JSON.parse(stored) : defaultUserProfile;
+      return stored ? sanitizeUserProfileValue(JSON.parse(stored)) : defaultUserProfile;
     },
   });
 
@@ -90,8 +108,9 @@ export const [FitnessContext, useFitness] = createContextHook(() => {
   }, [mealPlansQuery.data]);
 
   const updateUserProfile = useCallback((profile: UserProfile) => {
-    setUserProfile(profile);
-    mutateUserProfile(profile);
+    const sanitized = sanitizeUserProfileValue(profile);
+    setUserProfile(sanitized);
+    mutateUserProfile(sanitized);
   }, [mutateUserProfile]);
 
   const updateWorkout = useCallback((workoutId: string, updates: Partial<Workout>) => {
@@ -139,7 +158,7 @@ export const [FitnessContext, useFitness] = createContextHook(() => {
   }, [mutateMealPlans]);
 
   const updateGoal = useCallback((goalId: string, updates: Partial<Goal>) => {
-    const updatedProfile = {
+    const updatedProfile: UserProfile = {
       ...userProfile,
       goals: userProfile.goals.map((g) => (g.id === goalId ? { ...g, ...updates } : g)),
     };
