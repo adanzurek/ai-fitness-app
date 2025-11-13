@@ -37,6 +37,10 @@ export function useMonthlyWorkouts({ year, month }: UseMonthlyWorkoutsParams) {
 
   const shouldFetch = isSupabaseConfigured && !!userId;
 
+  if (!shouldFetch) {
+    console.log('[useMonthlyWorkouts] Skipping fetch. Supabase configured:', isSupabaseConfigured, 'userId present:', !!userId);
+  }
+
   const { data, error, isFetching, isLoading, refetch } = useQuery<CalendarDay[], Error>({
     queryKey: ['month_calendar', userId ?? 'anonymous', monthString],
     enabled: shouldFetch,
@@ -79,8 +83,16 @@ export function useMonthlyWorkouts({ year, month }: UseMonthlyWorkoutsParams) {
     },
   });
 
+  const sortedDays = useMemo(() => {
+    if (!data) {
+      return [] as CalendarDay[];
+    }
+
+    return [...data].sort((a, b) => a.date.localeCompare(b.date));
+  }, [data]);
+
   return {
-    days: data ?? [],
+    days: sortedDays,
     loading: userLoading || isFetching || isLoading,
     error,
     refetch,
