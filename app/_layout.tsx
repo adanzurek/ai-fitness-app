@@ -141,8 +141,8 @@ function SessionGate({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      if (hasProfile && (isAuthRoute || isOnboardingRoute)) {
-        console.log('SessionGate profile exists redirecting to tabs');
+      if (hasProfile && isAuthRoute) {
+        console.log('SessionGate profile exists redirecting to tabs from auth route');
         router.replace('/(tabs)');
         return;
       }

@@ -13,7 +13,7 @@ import {
 import { Stack, useRouter } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Circle } from "lucide-react-native";
 import Colors from "@/constants/colors";
 import { useSupabaseUser } from "@/hooks/useSupabaseUser";
@@ -45,6 +45,35 @@ export default function OnboardingScreen() {
   const [selectedDays, setSelectedDays] = useState<number | null>(null);
   const [selectedGoal, setSelectedGoal] = useState<FitnessGoalType | null>(null);
   const [customGoal, setCustomGoal] = useState<string>("");
+  const [hasPrefilled, setHasPrefilled] = useState<boolean>(false);
+  const [hasAlertedProfileError, setHasAlertedProfileError] = useState<boolean>(false);
+
+  const profileQuery = useQuery<Profile | null>({
+    queryKey: ["profile", user?.id ?? null],
+    enabled: Boolean(user) && isSupabaseConfigured,
+    staleTime: 5 * 60 * 1000,
+    queryFn: async ({ queryKey }) => {
+      const [, userId] = queryKey as [string, string | null];
+      if (!userId) {
+        console.log("Onboarding profile query skipped: no user");
+        return null;
+      }
+
+      console.log("Onboarding fetching profile for user", userId);
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("id, fitness_level, training_days_per_week, fitness_goal_type, fitness_goal_custom")
+        .eq("id", userId)
+        .maybeSingle();
+
+      if (error) {
+        console.error("Onboarding profile query error", error);
+        throw error;
+      }
+
+      return (data as Profile | null) ?? null;
+    },
+  });
 
   useEffect(() => {
     if (!loading && !user) {
@@ -52,6 +81,28 @@ export default function OnboardingScreen() {
       router.replace('/signin');
     }
   }, [loading, user, router]);
+
+  useEffect(() => {
+    if (profileQuery.data && !hasPrefilled) {
+      setSelectedLevel(profileQuery.data.fitness_level ?? null);
+      setSelectedDays(profileQuery.data.training_days_per_week ?? null);
+      setSelectedGoal(profileQuery.data.fitness_goal_type ?? null);
+      if (profileQuery.data.fitness_goal_type === 'custom') {
+        setCustomGoal(profileQuery.data.fitness_goal_custom ?? "");
+      } else {
+        setCustomGoal("");
+      }
+      setHasPrefilled(true);
+    }
+  }, [profileQuery.data, hasPrefilled]);
+
+  useEffect(() => {
+    if (profileQuery.isError && !hasAlertedProfileError) {
+      const message = profileQuery.error instanceof Error ? profileQuery.error.message : 'Unable to load profile details. Please try again later.';
+      Alert.alert('Onboarding', message);
+      setHasAlertedProfileError(true);
+    }
+  }, [profileQuery.isError, profileQuery.error, hasAlertedProfileError]);
 
   const canSubmit = useMemo(() => {
     if (!selectedLevel || !selectedDays || !selectedGoal) {
