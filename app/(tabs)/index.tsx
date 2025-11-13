@@ -5,23 +5,50 @@ import {
   ScrollView,
   TouchableOpacity,
   Platform,
+  Pressable,
 } from "react-native";
+import { useRouter } from "expo-router";
 import { useTodaysWorkout, useFitness } from "@/contexts/FitnessContext";
 import Colors from "@/constants/colors";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
-import { Dumbbell, Calendar, Award } from "lucide-react-native";
+import { Dumbbell, Calendar, Award, User } from "lucide-react-native";
 
 export default function HomeScreen() {
   const { toggleExerciseComplete, userProfile } = useFitness();
   const todaysWorkout = useTodaysWorkout();
   const insets = useSafeAreaInsets();
+  const router = useRouter();
+
+  const handleProfilePress = () => {
+    console.log("Navigating to profile screen");
+    router.push("/profile");
+  };
 
   return (
     <View style={styles.container}>
-      <View style={[styles.header, { paddingTop: Platform.OS === "web" ? 20 : insets.top + 20 }]}>
-        <Text style={styles.greeting}>Hi Champion 👋</Text>
-        <Text style={styles.subtitle}>Ready to crush today?</Text>
+      <View
+        style={[
+          styles.header,
+          { paddingTop: Platform.OS === "web" ? 20 : insets.top + 20 },
+        ]}
+      >
+        <View style={styles.headerCopy}>
+          <Text style={styles.greeting}>Hi Champion 👋</Text>
+          <Text style={styles.subtitle}>Ready to crush today?</Text>
+        </View>
+        <Pressable
+          onPress={handleProfilePress}
+          accessibilityRole="button"
+          accessibilityLabel="Open profile"
+          style={({ pressed }) => [
+            styles.profileButton,
+            pressed && styles.profileButtonPressed,
+          ]}
+          testID="profile-button"
+        >
+          <User color={Colors.text} size={20} />
+        </Pressable>
       </View>
 
       <ScrollView
@@ -156,6 +183,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingBottom: 20,
     backgroundColor: Colors.background,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  headerCopy: {
+    flex: 1,
+    paddingRight: 16,
   },
   greeting: {
     fontSize: 32,
@@ -166,6 +200,20 @@ const styles = StyleSheet.create({
   subtitle: {
     fontSize: 16,
     color: Colors.textSecondary,
+  },
+  profileButton: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: Colors.cardBackground,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  profileButtonPressed: {
+    backgroundColor: Colors.primaryDark,
+    borderColor: Colors.primary,
   },
   scrollView: {
     flex: 1,
