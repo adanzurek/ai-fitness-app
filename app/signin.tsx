@@ -86,6 +86,10 @@ export default function SignInScreen() {
     }
   };
 
+  const handleGoToSignUp = () => {
+    router.push("/signup" as any);
+  };
+
   const handleSkip = () => {
     console.log('Skipping auth, navigating to home stack');
     setSkipAuth(true);
@@ -148,8 +152,8 @@ export default function SignInScreen() {
               />
             </View>
 
-            <TouchableOpacity
-              style={styles.signInButton}
+            <TouchableOpacity 
+              style={styles.signInButton} 
               onPress={handleSignIn}
               disabled={loading}
             >
@@ -165,6 +169,17 @@ export default function SignInScreen() {
                   <Text style={styles.signInButtonText}>Sign In</Text>
                 )}
               </LinearGradient>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.createAccountButton}
+              onPress={handleGoToSignUp}
+              disabled={loading}
+              accessibilityRole="button"
+              accessibilityLabel="Create a new account"
+              testID="signInCreateAccountButton"
+            >
+              <Text style={styles.createAccountButtonText}>Create Account</Text>
             </TouchableOpacity>
 
             <View style={styles.divider}>
@@ -192,6 +207,12 @@ export default function SignInScreen() {
               <Text style={styles.skipButtonText}>Skip for now</Text>
             </TouchableOpacity>
 
+            <View style={styles.signUpContainer}>
+              <Text style={styles.signUpText}>Don&apos;t have an account?</Text>
+              <TouchableOpacity onPress={handleGoToSignUp}>
+                <Text style={styles.signUpLink}>Sign Up</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -286,6 +307,36 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: "700" as const,
     color: Colors.text,
+  },
+  createAccountButton: {
+    marginTop: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+    paddingVertical: 16,
+    alignItems: "center",
+    backgroundColor: Colors.cardBackground,
+  },
+  createAccountButtonText: {
+    fontSize: 16,
+    fontWeight: "600" as const,
+    color: Colors.primary,
+  },
+  signUpContainer: {
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    marginTop: 24,
+    gap: 6,
+  },
+  signUpText: {
+    fontSize: 14,
+    color: Colors.textSecondary,
+  },
+  signUpLink: {
+    fontSize: 14,
+    fontWeight: "700" as const,
+    color: Colors.primary,
   },
   divider: {
     flexDirection: 'row',
