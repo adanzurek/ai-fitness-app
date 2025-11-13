@@ -113,8 +113,8 @@ export default function SignInScreen() {
               <Dumbbell size={48} color={Colors.text} />
             </LinearGradient>
           </View>
-          <Text style={styles.appName}>Rork</Text>
-          <Text style={styles.tagline}>Your AI Strength Coach</Text>
+          <Text style={styles.appName}>Optimal</Text>
+          <Text style={styles.tagline}>Your Path to Peak Performance.</Text>
         </View>
 
         <View style={styles.formContainer}>

@@ -1,5 +1,5 @@
-const primaryRed = "#EF4444";
-const darkRed = "#DC2626";
+const primaryRed = "#B91C1C";
+const darkRed = "#7F1D1D";
 const darkBg = "#0A0A0A";
 const cardBg = "#1A1A1A";
 const white = "#FFFFFF";
