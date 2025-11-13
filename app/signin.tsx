@@ -165,6 +165,17 @@ export default function SignInScreen() {
             </LinearGradient>
           </TouchableOpacity>
 
+          <TouchableOpacity
+            style={styles.createAccountButton}
+            onPress={handleGoToSignUp}
+            disabled={loading}
+            accessibilityRole="button"
+            accessibilityLabel="Create a new account"
+            testID="signInCreateAccountButton"
+          >
+            <Text style={styles.createAccountButtonText}>Create Account</Text>
+          </TouchableOpacity>
+
           <View style={styles.divider}>
             <View style={styles.dividerLine} />
             <Text style={styles.dividerText}>or</Text>
@@ -284,6 +295,20 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: "700" as const,
     color: Colors.text,
+  },
+  createAccountButton: {
+    marginTop: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+    paddingVertical: 16,
+    alignItems: "center",
+    backgroundColor: Colors.cardBackground,
+  },
+  createAccountButtonText: {
+    fontSize: 16,
+    fontWeight: "600" as const,
+    color: Colors.primary,
   },
   signUpContainer: {
     flexDirection: "row",
