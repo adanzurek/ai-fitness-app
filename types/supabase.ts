@@ -4,7 +4,7 @@ export type FitnessGoalType = "strength" | "look_better" | "build_muscle" | "los
 export interface Profile {
   id: string;
   full_name: string | null;
-  avatar_url: string | null;
+
   fitness_level: FitnessLevel | null;
   training_days_per_week: number | null;
   fitness_goal_type: FitnessGoalType | null;

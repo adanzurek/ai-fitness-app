@@ -76,7 +76,6 @@ export default function OnboardingScreen() {
       const payload: Partial<Profile> & { id: string } = {
         id: user.id,
         full_name: typeof user.user_metadata?.full_name === 'string' ? user.user_metadata.full_name : user.email ?? null,
-        avatar_url: typeof user.user_metadata?.avatar_url === 'string' ? user.user_metadata.avatar_url : null,
         fitness_level: selectedLevel,
         training_days_per_week: selectedDays,
         fitness_goal_type: selectedGoal,

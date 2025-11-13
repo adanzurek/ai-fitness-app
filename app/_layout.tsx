@@ -51,7 +51,7 @@ function SessionGate({ children }: { children: React.ReactNode }) {
       console.log('SessionGate fetching profile for user', userId);
       const { data, error } = await supabase
         .from('profiles')
-        .select('id, full_name, avatar_url, fitness_level, training_days_per_week, fitness_goal_type, fitness_goal_custom')
+        .select('id, full_name, fitness_level, training_days_per_week, fitness_goal_type, fitness_goal_custom')
         .eq('id', userId)
         .maybeSingle();
 
@@ -129,7 +129,7 @@ function SessionGate({ children }: { children: React.ReactNode }) {
 
       if (profileQuery.isError) {
         console.error('SessionGate profile error detected', profileQuery.error);
-        if (isOnboardingRoute || isAuthRoute) {
+        if (!isOnboardingRoute && !isAuthRoute) {
           router.replace('/(tabs)');
         }
         return;
