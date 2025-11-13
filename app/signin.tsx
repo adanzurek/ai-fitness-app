@@ -1,11 +1,11 @@
 import { StyleSheet, Text, View, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, Alert, ActivityIndicator, ScrollView } from "react-native";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { useRouter } from "expo-router";
 import { Dumbbell } from "lucide-react-native";
 import Colors from "@/constants/colors";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { supabase } from "@/lib/supabase";
+import { supabase, isSupabaseConfigured } from "@/lib/supabase";
 import * as WebBrowser from 'expo-web-browser';
 import { setSkipAuth } from "@/lib/authSkip";
 
@@ -19,6 +19,47 @@ export default function SignInScreen() {
   const [loading, setLoading] = useState(false);
   const router = useRouter();
   const insets = useSafeAreaInsets();
+
+  const navigatePostAuth = useCallback(async (userId: string | null | undefined) => {
+    console.log('Post auth navigation invoked', { userId, isSupabaseConfigured });
+
+    if (!userId) {
+      console.log('Post auth navigation missing userId, routing to tabs');
+      router.replace('/(tabs)');
+      return;
+    }
+
+    if (isSupabaseConfigured) {
+      try {
+        console.log('Post auth checking profile existence', { userId });
+        const { data: profileData, error: profileError } = await supabase
+          .from('profiles')
+          .select('id')
+          .eq('id', userId)
+          .maybeSingle();
+
+        if (profileError) {
+          console.error('Post auth profile lookup error', profileError);
+          throw profileError;
+        }
+
+        if (!profileData) {
+          console.log('Post auth no profile found, redirecting to onboarding');
+          router.replace('/onboarding');
+          return;
+        }
+
+        console.log('Post auth profile found, redirecting to tabs');
+        router.replace('/(tabs)');
+        return;
+      } catch (lookupError) {
+        console.error('Post auth navigation failed during profile check', lookupError);
+      }
+    }
+
+    console.log('Post auth fallback routing to tabs');
+    router.replace('/(tabs)');
+  }, [router]);
 
   const handleSignIn = async () => {
     if (!email || !password) {
@@ -40,7 +81,7 @@ export default function SignInScreen() {
       
       if (data.session) {
         setSkipAuth(false);
-        router.replace("/(tabs)");
+        await navigatePostAuth(data.session.user.id);
       } else {
         Alert.alert('Error', 'Sign in succeeded but no session was created. Please try again.');
       }
@@ -76,7 +117,8 @@ export default function SignInScreen() {
           const { error: sessionError } = await supabase.auth.exchangeCodeForSession(code);
           if (sessionError) throw sessionError;
           setSkipAuth(false);
-          router.replace("/(tabs)");
+          const { data: userData } = await supabase.auth.getUser();
+          await navigatePostAuth(userData.user?.id);
         }
       }
     } catch (error: any) {

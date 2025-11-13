@@ -1,7 +1,14 @@
+export type FitnessLevel = "beginner" | "intermediate" | "advanced";
+export type FitnessGoalType = "strength" | "look_better" | "build_muscle" | "lose_fat" | "custom";
+
 export interface Profile {
   id: string;
   full_name: string | null;
   avatar_url: string | null;
+  fitness_level: FitnessLevel | null;
+  training_days_per_week: number | null;
+  fitness_goal_type: FitnessGoalType | null;
+  fitness_goal_custom: string | null;
 }
 
 export interface Workout {
