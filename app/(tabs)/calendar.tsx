@@ -6,14 +6,14 @@ import {
   TouchableOpacity,
   Platform,
 } from "react-native";
-import { useUpcomingWorkouts, useFitness } from "../../contexts/FitnessContext";
-import Colors from "../../constants/colors";
+import { useUpcomingWorkouts, useFitness } from "@/contexts/FitnessContext";
+import Colors from "@/constants/colors";
 import { useState, useMemo } from "react";
-import { WorkoutType } from "../../types/fitness";
+import { WorkoutType } from "@/types/fitness";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
-import MonthlyCalendar from "../../components/MonthlyCalendar";
-import WorkoutEditorSheet from "../../components/WorkoutEditorSheet";
+import MonthlyCalendar from "@/components/MonthlyCalendar";
+import WorkoutEditorSheet from "@/components/WorkoutEditorSheet";
 
 type WorkoutTypeColors = {
   bg: string;
@@ -48,11 +48,8 @@ export default function CalendarScreen() {
   const [selectedDate, setSelectedDate] = useState<string>(
     today.toISOString().split("T")[0]
   );
-  const [visibleMonthDate, setVisibleMonthDate] = useState<Date>(
-    new Date(today.getFullYear(), today.getMonth(), 1)
-  );
-  const currentMonth = visibleMonthDate.getMonth();
-  const currentYear = visibleMonthDate.getFullYear();
+  const [currentMonth] = useState<number>(today.getMonth());
+  const [currentYear] = useState<number>(today.getFullYear());
   const [showEditor, setShowEditor] = useState(false);
   const [editingDate, setEditingDate] = useState<string>("");
 
@@ -67,12 +64,6 @@ export default function CalendarScreen() {
     setEditingDate(dateISO);
     setSelectedDate(dateISO);
     setShowEditor(true);
-  };
-
-  const handleMonthChange = (yearValue: number, monthValue: number) => {
-    const nextVisible = new Date(yearValue, monthValue, 1);
-    setVisibleMonthDate(nextVisible);
-    setSelectedDate(nextVisible.toISOString().split("T")[0]);
   };
 
   return (
@@ -91,7 +82,6 @@ export default function CalendarScreen() {
           year={currentYear}
           month={currentMonth}
           onEdit={handleEditWorkout}
-          onMonthChange={handleMonthChange}
         />
 
         {selectedWorkout ? (
