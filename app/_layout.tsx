@@ -35,13 +35,31 @@ function SessionGate({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (loading) return;
+    if (loading) {
+      console.log('SessionGate waiting for auth state...');
+      return;
+    }
 
-    const inTabsGroup = segments[0] === '(tabs)';
+    const currentSegment = segments[0] ?? '';
+    const authRoutes = new Set(['signin', 'signup']);
+    const isAuthRoute = authRoutes.has(currentSegment);
+    const hasAccess = Boolean(user) || skipAuth;
 
-    if (!user && !skipAuth && inTabsGroup) {
+    console.log('SessionGate route check', {
+      currentSegment,
+      isAuthRoute,
+      hasAccess,
+      skipAuth,
+    });
+
+    if (!hasAccess && !isAuthRoute) {
+      console.log('SessionGate redirecting to signin');
       router.replace('/signin');
-    } else if ((user || skipAuth) && !inTabsGroup) {
+      return;
+    }
+
+    if (hasAccess && isAuthRoute) {
+      console.log('SessionGate redirecting to tabs');
       router.replace('/(tabs)');
     }
   }, [user, loading, segments, skipAuth, router]);
