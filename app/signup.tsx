@@ -2,12 +2,14 @@ import { StyleSheet, Text, View, TextInput, TouchableOpacity, KeyboardAvoidingVi
 import { useState } from "react";
 import { useRouter } from "expo-router";
 import { Dumbbell } from "lucide-react-native";
-import Colors from "@/constants/colors";
+import Colors from "../constants/colors";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { supabase } from "@/lib/supabase";
+import { supabase } from "../lib/supabase";
 import * as WebBrowser from 'expo-web-browser';
-import { redirectUri, getCodeFromUrl } from '@/lib/linking';
+import { setSkipAuth } from "../lib/authSkip";
+import { usePostAuthNavigation } from "../hooks/usePostAuthNavigation";
+import { redirectUri, getCodeFromUrl } from '../lib/linking';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -18,6 +20,7 @@ export default function SignUpScreen() {
   const [loading, setLoading] = useState(false);
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const navigatePostAuth = usePostAuthNavigation();
 
   const handleSignUp = async () => {
     if (!name || !email || !password) {
@@ -48,7 +51,9 @@ export default function SignUpScreen() {
       
       if (data?.session) {
         Alert.alert('Success', 'Account created successfully!');
-        router.replace("/(tabs)");
+        setSkipAuth(false);
+        await navigatePostAuth(data.session.user.id);
+        return;
       } else {
         Alert.alert('Success', 'Account created! Please check your email to verify your account, then sign in.');
         router.replace('/signin');
@@ -84,7 +89,9 @@ export default function SignUpScreen() {
         if (code) {
           const { error: sessionError } = await supabase.auth.exchangeCodeForSession(code);
           if (sessionError) throw sessionError;
-          router.replace("/(tabs)");
+          setSkipAuth(false);
+          const { data: userData } = await supabase.auth.getUser();
+          await navigatePostAuth(userData.user?.id);
         }
       }
     } catch (error: any) {

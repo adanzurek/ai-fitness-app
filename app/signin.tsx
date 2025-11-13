@@ -1,15 +1,16 @@
 import { StyleSheet, Text, View, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, Alert, ActivityIndicator, ScrollView } from "react-native";
-import { useCallback, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "expo-router";
 import { Dumbbell } from "lucide-react-native";
-import Colors from "@/constants/colors";
+import Colors from "../constants/colors";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { supabase, isSupabaseConfigured } from "@/lib/supabase";
+import { supabase } from "../lib/supabase";
 import * as WebBrowser from 'expo-web-browser';
-import { setSkipAuth } from "@/lib/authSkip";
+import { setSkipAuth } from "../lib/authSkip";
+import { usePostAuthNavigation } from "../hooks/usePostAuthNavigation";
 
-import { redirectUri, getCodeFromUrl } from '@/lib/linking';
+import { redirectUri, getCodeFromUrl } from '../lib/linking';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -19,47 +20,7 @@ export default function SignInScreen() {
   const [loading, setLoading] = useState(false);
   const router = useRouter();
   const insets = useSafeAreaInsets();
-
-  const navigatePostAuth = useCallback(async (userId: string | null | undefined) => {
-    console.log('Post auth navigation invoked', { userId, isSupabaseConfigured });
-
-    if (!userId) {
-      console.log('Post auth navigation missing userId, routing to tabs');
-      router.replace('/(tabs)');
-      return;
-    }
-
-    if (isSupabaseConfigured) {
-      try {
-        console.log('Post auth checking profile existence', { userId });
-        const { data: profileData, error: profileError } = await supabase
-          .from('profiles')
-          .select('id')
-          .eq('id', userId)
-          .maybeSingle();
-
-        if (profileError) {
-          console.error('Post auth profile lookup error', profileError);
-          throw profileError;
-        }
-
-        if (!profileData) {
-          console.log('Post auth no profile found, redirecting to onboarding');
-          router.replace('/onboarding');
-          return;
-        }
-
-        console.log('Post auth profile found, redirecting to tabs');
-        router.replace('/(tabs)');
-        return;
-      } catch (lookupError) {
-        console.error('Post auth navigation failed during profile check', lookupError);
-      }
-    }
-
-    console.log('Post auth fallback routing to tabs');
-    router.replace('/(tabs)');
-  }, [router]);
+  const navigatePostAuth = usePostAuthNavigation();
 
   const handleSignIn = async () => {
     if (!email || !password) {
