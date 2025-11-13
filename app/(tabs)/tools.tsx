@@ -89,6 +89,19 @@ const FUNCTION_TEMPLATES = {
       null,
       2,
     ),
+  generate_week: (userId: string) =>
+    JSON.stringify(
+      {
+        user_id: userId,
+        // goal: "increase bench press by 25 pounds",
+        // training_days: 4,
+        // experience_level: "intermediate",
+        // start_date: new Date().toISOString().split("T")[0],
+        // plan_id: "00000000-0000-0000-0000-000000000000",
+      },
+      null,
+      2,
+    ),
   progress_summary: (userId: string) =>
     JSON.stringify(
       {
@@ -409,4 +422,3 @@ const styles = StyleSheet.create({
     color: Colors.primary,
   },
 });
-
