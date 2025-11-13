@@ -176,10 +176,10 @@ export default function SignInScreen() {
               onPress={handleGoToSignUp}
               disabled={loading}
               accessibilityRole="button"
-              accessibilityLabel="Create a new account"
+              accessibilityLabel="Sign up for a new account"
               testID="signInCreateAccountButton"
             >
-              <Text style={styles.createAccountButtonText}>Create Account</Text>
+              <Text style={styles.createAccountButtonText}>Sign Up</Text>
             </TouchableOpacity>
 
             <View style={styles.divider}>
@@ -206,13 +206,6 @@ export default function SignInScreen() {
             >
               <Text style={styles.skipButtonText}>Skip for now</Text>
             </TouchableOpacity>
-
-            <View style={styles.signUpContainer}>
-              <Text style={styles.signUpText}>Don&apos;t have an account?</Text>
-              <TouchableOpacity onPress={handleGoToSignUp}>
-                <Text style={styles.signUpLink}>Sign Up</Text>
-              </TouchableOpacity>
-            </View>
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -320,22 +313,6 @@ const styles = StyleSheet.create({
   createAccountButtonText: {
     fontSize: 16,
     fontWeight: "600" as const,
-    color: Colors.primary,
-  },
-  signUpContainer: {
-    flexDirection: "row",
-    justifyContent: "center",
-    alignItems: "center",
-    marginTop: 24,
-    gap: 6,
-  },
-  signUpText: {
-    fontSize: 14,
-    color: Colors.textSecondary,
-  },
-  signUpLink: {
-    fontSize: 14,
-    fontWeight: "700" as const,
     color: Colors.primary,
   },
   divider: {
