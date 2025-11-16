@@ -1,15 +1,12 @@
 import { Tabs } from "expo-router";
 import { Home, MessageCircle, TrendingUp, UtensilsCrossed, CalendarDays, Wrench } from "lucide-react-native";
 import React from "react";
-import { Platform } from "react-native";
-import Colors from "@/constants/colors";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import Colors from "../../constants/colors";
 
 export default function TabLayout() {
-  const insets = useSafeAreaInsets();
-  
   return (
     <Tabs
+      initialRouteName="home"
       screenOptions={{
         tabBarActiveTintColor: Colors.tabIconSelected,
         tabBarInactiveTintColor: Colors.tabIconDefault,
@@ -18,9 +15,6 @@ export default function TabLayout() {
           backgroundColor: Colors.cardBackground,
           borderTopColor: Colors.border,
           borderTopWidth: 1,
-          height: Platform.OS === "web" ? 70 : 70 + insets.bottom,
-          paddingBottom: Platform.OS === "web" ? 10 : insets.bottom + 10,
-          paddingTop: 10,
         },
         tabBarLabelStyle: {
           fontSize: 11,
@@ -33,7 +27,7 @@ export default function TabLayout() {
       }}
     >
       <Tabs.Screen
-        name="index"
+        name="home"
         options={{
           title: "Home",
           tabBarIcon: ({ color, size }) => <Home color={color} size={size} />,
