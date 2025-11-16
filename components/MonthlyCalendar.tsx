@@ -1,16 +1,27 @@
 import { useMemo } from 'react';
-import { StyleSheet, Text, View, TouchableOpacity, Dimensions, ActivityIndicator } from 'react-native';
+import {
+  StyleSheet,
+  Text,
+  View,
+  TouchableOpacity,
+  ActivityIndicator,
+} from 'react-native';
 import Colors from '@/constants/colors';
 import type { CalendarDay } from '@/hooks/useMonthlyWorkouts';
 
-const { width } = Dimensions.get('window');
-const CALENDAR_PADDING = 16;
-const DAY_SIZE = (width - CALENDAR_PADDING * 2 - 6 * 8) / 7;
+const DAY_COLUMN_PERCENT = `${(1 / 7) * 100}%` as const;
+
+function toStartOfDay(date: Date) {
+  const normalized = new Date(date);
+  normalized.setHours(0, 0, 0, 0);
+  return normalized;
+}
 
 function formatLocalISO(date: Date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
+  const normalized = toStartOfDay(date);
+  const year = normalized.getFullYear();
+  const month = String(normalized.getMonth() + 1).padStart(2, '0');
+  const day = String(normalized.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 }
 
@@ -38,21 +49,21 @@ function getWorkoutColors(block: string): WorkoutTypeColors {
 }
 
 function getDaysInMonth(year: number, month: number): Date[] {
-  const firstDay = new Date(year, month, 1);
-  const lastDay = new Date(year, month + 1, 0);
+  const firstDay = toStartOfDay(new Date(year, month, 1));
+  const lastDay = toStartOfDay(new Date(year, month + 1, 0));
   const totalDays = lastDay.getDate();
   const leading = firstDay.getDay();
 
   const days: Date[] = [];
 
   for (let offset = leading; offset > 0; offset -= 1) {
-    const prevDate = new Date(firstDay);
+    const prevDate = toStartOfDay(new Date(firstDay));
     prevDate.setDate(firstDay.getDate() - offset);
     days.push(prevDate);
   }
 
   for (let index = 0; index < totalDays; index += 1) {
-    const current = new Date(firstDay);
+    const current = toStartOfDay(new Date(firstDay));
     current.setDate(firstDay.getDate() + index);
     days.push(current);
   }
@@ -60,7 +71,7 @@ function getDaysInMonth(year: number, month: number): Date[] {
   const trailing = (7 - (days.length % 7)) % 7;
 
   for (let offset = 1; offset <= trailing; offset += 1) {
-    const nextDate = new Date(lastDay);
+    const nextDate = toStartOfDay(new Date(lastDay));
     nextDate.setDate(lastDay.getDate() + offset);
     days.push(nextDate);
   }
@@ -69,8 +80,8 @@ function getDaysInMonth(year: number, month: number): Date[] {
 }
 
 interface MonthlyCalendarProps {
-  year: number;
-  month: number; // 0-indexed
+  year?: number;
+  month?: number; // 0-indexed
   days: CalendarDay[];
   loading: boolean;
   error?: Error | null;
@@ -79,22 +90,48 @@ interface MonthlyCalendarProps {
   selectedDate?: string;
 }
 
-export default function MonthlyCalendar({ year, month, days, loading, error, onSelectDate, todayOverride, selectedDate }: MonthlyCalendarProps) {
-  const workoutsByDate = useMemo(() => (
-    days.reduce<Record<string, CalendarDay>>((acc, day) => {
-      acc[day.date] = day;
-      return acc;
-    }, {})
-  ), [days]);
+export default function MonthlyCalendar({
+  year,
+  month,
+  days,
+  loading,
+  error,
+  onSelectDate,
+  todayOverride,
+  selectedDate,
+}: MonthlyCalendarProps) {
+  const workoutsByDate = useMemo(
+    () =>
+      days.reduce<Record<string, CalendarDay>>((acc, day) => {
+        acc[day.date] = day;
+        return acc;
+      }, {}),
+    [days],
+  );
 
-  const calendarDays = getDaysInMonth(year, month);
-  const today = todayOverride ?? new Date();
-  const todayStr = formatLocalISO(today);
+  const systemToday = useMemo(() => toStartOfDay(todayOverride ?? new Date()), [todayOverride]);
+  const activeMonthDate = useMemo(() => {
+    if (typeof year === 'number' && typeof month === 'number') {
+      return toStartOfDay(new Date(year, month, 1));
+    }
+    return toStartOfDay(new Date(systemToday.getFullYear(), systemToday.getMonth(), 1));
+  }, [month, systemToday, year]);
 
-  const monthName = new Date(year, month, 1).toLocaleDateString('en-US', {
-    month: 'long',
-    year: 'numeric',
-  });
+  const activeYear = activeMonthDate.getFullYear();
+  const activeMonth = activeMonthDate.getMonth();
+
+  const calendarDays = useMemo(() => getDaysInMonth(activeYear, activeMonth), [activeMonth, activeYear]);
+  const todayStr = formatLocalISO(systemToday);
+  const resolvedSelectedDate = selectedDate ?? todayStr;
+
+  const monthName = useMemo(
+    () =>
+      activeMonthDate.toLocaleDateString('en-US', {
+        month: 'long',
+        year: 'numeric',
+      }),
+    [activeMonthDate],
+  );
 
   return (
     <View style={styles.container}>
@@ -115,7 +152,9 @@ export default function MonthlyCalendar({ year, month, days, loading, error, onS
           )}
           <View style={styles.weekdayRow}>
             {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((dayLabel, index) => (
-              <View key={dayLabel} style={[styles.weekdayCell, { width: DAY_SIZE }]}
+              <View
+                key={dayLabel}
+                style={styles.weekdayCell}
                 testID={`calendar-weekday-${index}`}
               >
                 <Text style={styles.weekdayText}>{dayLabel}</Text>
@@ -126,19 +165,20 @@ export default function MonthlyCalendar({ year, month, days, loading, error, onS
           <View style={styles.daysGrid}>
             {calendarDays.map((date, index) => {
               const dateStr = formatLocalISO(date);
-              const isCurrentMonth = date.getMonth() === month;
+              const isCurrentMonth = date.getMonth() === activeMonth;
               const isTodayDate = dateStr === todayStr;
               const dayData = workoutsByDate[dateStr];
               const firstWorkoutType = dayData?.workouts?.[0]?.type ?? null;
               const colors = firstWorkoutType ? getWorkoutColors(firstWorkoutType) : null;
-              const isSelected = selectedDate === dateStr;
+              const isSelected = resolvedSelectedDate === dateStr;
 
               return (
                 <TouchableOpacity
-                  key={index}
-                  style={[styles.dayCell, { width: DAY_SIZE, height: DAY_SIZE }]}
+                  key={dateStr}
+                  style={styles.dayCell}
                   onPress={() => onSelectDate?.(dateStr)}
                   activeOpacity={0.7}
+                  testID={`calendar-day-${dateStr}`}
                 >
                   <View
                     style={[
@@ -184,12 +224,12 @@ export default function MonthlyCalendar({ year, month, days, loading, error, onS
           </View>
 
           <View style={styles.legend}>
-                {['Upper', 'Lower', 'Push', 'Pull', 'Legs', 'Rest'].map((type) => {
-                  const colors = getWorkoutColors(type);
-                  return (
-                    <View key={type} style={styles.legendItem}>
-                      <View style={[styles.legendDot, { backgroundColor: colors.text }]} />
-                      <Text style={styles.legendText}>{type}</Text>
+            {['Upper', 'Lower', 'Push', 'Pull', 'Legs', 'Rest'].map((type) => {
+              const colors = getWorkoutColors(type);
+              return (
+                <View key={type} style={styles.legendItem}>
+                  <View style={[styles.legendDot, { backgroundColor: colors.text }]} />
+                  <Text style={styles.legendText}>{type}</Text>
                 </View>
               );
             })}
@@ -236,10 +276,11 @@ const styles = StyleSheet.create({
   weekdayRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 12,
-    paddingHorizontal: 4,
+    marginBottom: 16,
+    paddingHorizontal: 2,
   },
   weekdayCell: {
+    width: DAY_COLUMN_PERCENT,
     alignItems: 'center',
     paddingVertical: 6,
     borderRadius: 10,
@@ -257,17 +298,20 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
+    justifyContent: 'space-between',
   },
   dayCell: {
-    marginBottom: 8,
+    width: DAY_COLUMN_PERCENT,
+    maxWidth: DAY_COLUMN_PERCENT,
+    marginBottom: 12,
   },
   dayInner: {
-    flex: 1,
-    borderRadius: 12,
+    width: '100%',
+    aspectRatio: 1,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 4,
+    paddingVertical: 6,
   },
   dayOutsideMonth: {
     opacity: 0.3,
@@ -294,12 +338,11 @@ const styles = StyleSheet.create({
   },
   workoutBadgeContainer: {
     alignItems: 'center',
-    gap: 2,
+    marginTop: 4,
   },
   workoutTypeLabel: {
     fontSize: 9,
     fontWeight: '600' as const,
-    marginTop: 2,
   },
   legend: {
     flexDirection: 'row',
