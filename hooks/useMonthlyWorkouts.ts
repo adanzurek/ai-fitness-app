@@ -1,7 +1,7 @@
-import { useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { supabase, isSupabaseConfigured } from '@/lib/supabase';
-import { useSupabaseUser } from '@/hooks/useSupabaseUser';
+import { useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { supabase, isSupabaseConfigured } from "@/lib/supabase";
+import { useSupabaseUser } from "@/hooks/useSupabaseUser";
 
 export type CalendarWorkout = {
   workout_id: string;
@@ -11,18 +11,50 @@ export type CalendarWorkout = {
 
 export type CalendarDay = {
   date: string;
-  status: 'planned' | 'completed' | 'skipped';
+  status: "planned" | "completed" | "skipped";
   workouts: CalendarWorkout[];
-};
-
-type MonthCalendarResponse = {
-  ok: boolean;
-  days: CalendarDay[];
 };
 
 interface UseMonthlyWorkoutsParams {
   year: number;
   month: number; // 0-indexed
+}
+
+type WorkoutRow = {
+  id: string;
+  workout_date: string | null;
+  type: string | null;
+  notes: string | null;
+  completed?: boolean | null;
+};
+
+function toISODateUTC(date: Date) {
+  return date.toISOString().split("T")[0];
+}
+
+function startOfWeekUTC(date: Date) {
+  const copy = new Date(date);
+  const day = copy.getUTCDay();
+  copy.setUTCDate(copy.getUTCDate() - day);
+  return copy;
+}
+
+function endOfWeekUTC(date: Date) {
+  const copy = new Date(date);
+  const day = copy.getUTCDay();
+  copy.setUTCDate(copy.getUTCDate() + (6 - day));
+  return copy;
+}
+
+function getCalendarRange(year: number, month: number) {
+  const monthStart = new Date(Date.UTC(year, month, 1));
+  const monthEnd = new Date(Date.UTC(year, month + 1, 0));
+  const rangeStart = startOfWeekUTC(monthStart);
+  const rangeEnd = endOfWeekUTC(monthEnd);
+  return {
+    startISO: toISODateUTC(rangeStart),
+    endISO: toISODateUTC(rangeEnd),
+  };
 }
 
 export function useMonthlyWorkouts({ year, month }: UseMonthlyWorkoutsParams) {
@@ -34,6 +66,8 @@ export function useMonthlyWorkouts({ year, month }: UseMonthlyWorkoutsParams) {
     const formattedMonth = normalizedMonth.toString().padStart(2, '0');
     return `${year}-${formattedMonth}`;
   }, [year, month]);
+
+  const calendarRange = useMemo(() => getCalendarRange(year, month), [year, month]);
 
   const shouldFetch = isSupabaseConfigured && !!userId;
 
@@ -48,44 +82,88 @@ export function useMonthlyWorkouts({ year, month }: UseMonthlyWorkoutsParams) {
       }
 
       console.log(
-        `[useMonthlyWorkouts] invoking month_calendar for user ${userId} @ ${monthString}`
+        `[useMonthlyWorkouts] querying workouts for ${userId} between ${calendarRange.startISO} and ${calendarRange.endISO}`
       );
 
-      const { data: response, error: invokeError } = await supabase.functions.invoke<MonthCalendarResponse>(
-        'month_calendar',
-        {
-          body: {
-            user_id: userId,
-            month: monthString,
-          },
-        }
+      const fetchRows = async (withCompletedColumn: boolean) => {
+        const selectFields = withCompletedColumn
+          ? 'id, workout_date, type, notes, completed'
+          : 'id, workout_date, type, notes';
+        return supabase
+          .from('workouts')
+          .select(selectFields)
+          .eq('user_id', userId)
+          .gte('workout_date', calendarRange.startISO)
+          .lte('workout_date', calendarRange.endISO)
+          .order('workout_date', { ascending: true });
+      };
+
+      let { data: rows, error: queryError } = await fetchRows(true);
+
+      if (queryError && queryError.code === '42703') {
+        console.warn(
+          "[useMonthlyWorkouts] 'completed' column missing, retrying without it"
+        );
+        const fallback = await fetchRows(false);
+        rows = fallback.data;
+        queryError = fallback.error;
+      }
+
+      if (queryError) {
+        console.error('[useMonthlyWorkouts] workouts query failed', queryError);
+        throw queryError;
+      }
+
+      const workoutRows = Array.isArray(rows) ? (rows as unknown as WorkoutRow[]) : [];
+
+      if (workoutRows.length === 0) {
+        return [];
+      }
+
+      const grouped = workoutRows.reduce<Record<string, { workouts: CalendarWorkout[]; completed: number; total: number }>>(
+        (acc, row: WorkoutRow) => {
+          if (!row.workout_date) {
+            return acc;
+          }
+          if (!acc[row.workout_date]) {
+            acc[row.workout_date] = {
+              workouts: [],
+              completed: 0,
+              total: 0,
+            };
+          }
+          acc[row.workout_date].workouts.push({
+            workout_id: row.id,
+            type: row.type ?? null,
+            notes: row.notes ?? null,
+          });
+          acc[row.workout_date].total += 1;
+          if (row.completed) {
+            acc[row.workout_date].completed += 1;
+          }
+          return acc;
+        },
+        {}
       );
 
-      if (invokeError) {
-        console.error('[useMonthlyWorkouts] edge function error', invokeError);
-        throw invokeError;
-      }
-
-      if (!response) {
-        console.error('[useMonthlyWorkouts] edge function returned no response');
-        throw new Error('Unable to load workouts for this month');
-      }
-
-      if (response.ok === false) {
-        console.error('[useMonthlyWorkouts] edge function returned not ok', response);
-        throw new Error('Unable to load workouts for this month');
-      }
-
-      console.log(
-        `[useMonthlyWorkouts] received ${response.days?.length ?? 0} day entries for ${monthString}`
-      );
-
-      return response.days ?? [];
+      return Object.entries(grouped)
+        .map(([date, details]) => {
+          const status: CalendarDay['status'] =
+            details.completed >= details.total && details.total > 0 ? 'completed' : 'planned';
+          return {
+            date,
+            status,
+            workouts: details.workouts,
+          };
+        })
+        .sort((a, b) => a.date.localeCompare(b.date));
     },
   });
 
+  const days = (data ?? []) as CalendarDay[];
+
   return {
-    days: data ?? [],
+    days,
     loading: userLoading || isFetching || isLoading,
     error,
     refetch,

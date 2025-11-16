@@ -7,6 +7,13 @@ const { width } = Dimensions.get('window');
 const CALENDAR_PADDING = 16;
 const DAY_SIZE = (width - CALENDAR_PADDING * 2 - 6 * 8) / 7;
 
+function formatLocalISO(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 type WorkoutTypeColors = {
   bg: string;
   text: string;
@@ -76,7 +83,7 @@ export default function MonthlyCalendar({ year, month, days, loading, error, onS
 
   const calendarDays = getDaysInMonth(year, month);
   const today = new Date();
-  const todayStr = today.toISOString().split('T')[0];
+  const todayStr = formatLocalISO(today);
 
   const monthName = new Date(year, month, 1).toLocaleDateString('en-US', {
     month: 'long',
@@ -110,7 +117,7 @@ export default function MonthlyCalendar({ year, month, days, loading, error, onS
 
           <View style={styles.daysGrid}>
             {calendarDays.map((date, index) => {
-              const dateStr = date.toISOString().split('T')[0];
+              const dateStr = formatLocalISO(date);
               const isCurrentMonth = date.getMonth() === month;
               const isTodayDate = dateStr === todayStr;
               const dayData = workoutsByDate[dateStr];

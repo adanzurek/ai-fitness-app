@@ -109,7 +109,7 @@ type GoalCardProps = {
 };
 
 type SkeletonBlockProps = {
-  width: number | string;
+  width: number | `${number}%`;
   height: number;
   borderRadius: number;
   style?: ViewStyle;

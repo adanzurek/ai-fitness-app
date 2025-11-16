@@ -1,17 +1,16 @@
-import { useRouter } from "expo-router";
-import { useEffect } from "react";
+import { Redirect, useRootNavigationState } from "expo-router";
 import { View, StyleSheet } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 export default function Index() {
-  const router = useRouter();
+  const navigationState = useRootNavigationState();
   const insets = useSafeAreaInsets();
 
-  useEffect(() => {
-    router.replace("/(tabs)/home");
-  }, [router]);
+  if (!navigationState?.key) {
+    return <View style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom }]} />;
+  }
 
-  return <View style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom }]} />;
+  return <Redirect href="/(tabs)/home" />;
 }
 
 const styles = StyleSheet.create({
