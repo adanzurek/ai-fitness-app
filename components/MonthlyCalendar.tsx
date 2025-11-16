@@ -71,9 +71,11 @@ interface MonthlyCalendarProps {
   loading: boolean;
   error?: Error | null;
   onSelectDate?: (dayISO: string) => void;
+  todayOverride?: Date;
+  selectedDate?: string;
 }
 
-export default function MonthlyCalendar({ year, month, days, loading, error, onSelectDate }: MonthlyCalendarProps) {
+export default function MonthlyCalendar({ year, month, days, loading, error, onSelectDate, todayOverride, selectedDate }: MonthlyCalendarProps) {
   const workoutsByDate = useMemo(() => (
     days.reduce<Record<string, CalendarDay>>((acc, day) => {
       acc[day.date] = day;
@@ -82,7 +84,7 @@ export default function MonthlyCalendar({ year, month, days, loading, error, onS
   ), [days]);
 
   const calendarDays = getDaysInMonth(year, month);
-  const today = new Date();
+  const today = todayOverride ?? new Date();
   const todayStr = formatLocalISO(today);
 
   const monthName = new Date(year, month, 1).toLocaleDateString('en-US', {
@@ -123,6 +125,7 @@ export default function MonthlyCalendar({ year, month, days, loading, error, onS
               const dayData = workoutsByDate[dateStr];
               const firstWorkoutType = dayData?.workouts?.[0]?.type ?? null;
               const colors = firstWorkoutType ? getWorkoutColors(firstWorkoutType) : null;
+              const isSelected = selectedDate === dateStr;
 
               return (
                 <TouchableOpacity
@@ -136,6 +139,7 @@ export default function MonthlyCalendar({ year, month, days, loading, error, onS
                       styles.dayInner,
                       !isCurrentMonth && styles.dayOutsideMonth,
                       isTodayDate && styles.dayToday,
+                      isSelected && styles.daySelected,
                       dayData && colors && { backgroundColor: colors.bg },
                     ]}
                   >
@@ -269,6 +273,10 @@ const styles = StyleSheet.create({
   dayNumberActive: {
     color: Colors.text,
     fontWeight: '700' as const,
+  },
+  daySelected: {
+    borderWidth: 2,
+    borderColor: Colors.primary,
   },
   workoutBadgeContainer: {
     alignItems: 'center',
