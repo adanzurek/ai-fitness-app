@@ -1,4 +1,4 @@
-import { Stack, useLocalSearchParams, useRouter } from "expo-router";
+import { Stack, useLocalSearchParams } from "expo-router";
 import {
   ActivityIndicator,
   Alert,
@@ -13,42 +13,24 @@ import Colors from "@/constants/colors";
 import { useSupabaseUser } from "@/hooks/useSupabaseUser";
 import { supabase, isSupabaseConfigured } from "@/lib/supabase";
 import { useMutation } from "@tanstack/react-query";
-import { CheckCircle2, Circle, ArrowRight } from "lucide-react-native";
+import { CheckCircle2, Circle } from "lucide-react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 const CARD_HORIZONTAL_PADDING = 20;
 
-interface ComposeTodayExercise {
+type WorkoutSet = {
   id: string;
   name: string;
   sets?: number | null;
   reps?: number | null;
   rir?: number | null;
   weight?: number | null;
-}
-
-interface ComposeTodayWorkout {
-  id: string;
-  label: string;
-  workout_date: string;
-  exercises?: ComposeTodayExercise[] | null;
-}
-
-interface ComposeTodayResponse {
-  ok: boolean;
-  workout: ComposeTodayWorkout | null;
-  reason?: "rest" | "no_plan" | string;
-}
+};
 
 type LogCompletionInput = {
   exerciseId: string;
   completed: boolean;
   previous: boolean;
-};
-
-type ParsedParams = {
-  dateISO: string;
-  payload: ComposeTodayResponse | null;
 };
 
 function formatFriendlyDate(dateISO: string) {
@@ -61,65 +43,69 @@ function formatFriendlyDate(dateISO: string) {
   });
 }
 
-function decodeParams(rawDate?: string | string[], rawPayload?: string | string[]): ParsedParams {
-  const dateISO = typeof rawDate === "string" ? rawDate : Array.isArray(rawDate) ? rawDate[0] : "";
-  if (!rawPayload) {
-    return { dateISO, payload: null };
+function getParamValue(param?: string | string[]): string {
+  if (typeof param === "string") {
+    return param;
   }
-  const encoded = typeof rawPayload === "string" ? rawPayload : Array.isArray(rawPayload) ? rawPayload[0] : "";
-  if (!encoded) {
-    return { dateISO, payload: null };
+  if (Array.isArray(param) && param.length > 0) {
+    return param[0] ?? "";
+  }
+  return "";
+}
+
+function parseSets(rawSets: string): WorkoutSet[] {
+  if (!rawSets) {
+    return [];
   }
   try {
-    const decoded = decodeURIComponent(encoded);
-    const parsed = JSON.parse(decoded) as ComposeTodayResponse;
-    return { dateISO, payload: parsed };
+    const parsed = JSON.parse(rawSets) as unknown;
+    if (Array.isArray(parsed)) {
+      return parsed.filter((item): item is WorkoutSet => {
+        if (!item || typeof item !== "object") {
+          return false;
+        }
+        const candidate = item as Partial<WorkoutSet>;
+        return typeof candidate.id === "string" && typeof candidate.name === "string";
+      });
+    }
   } catch (error) {
-    console.error("[DayView] Failed to parse payload", error);
-    return { dateISO, payload: null };
+    console.error("[DayView] Failed to parse sets", error);
   }
+  return [];
 }
 
 export default function DayViewScreen() {
   const params = useLocalSearchParams();
-  const router = useRouter();
   const { user } = useSupabaseUser();
   const insets = useSafeAreaInsets();
-  const { dateISO, payload } = useMemo(() => decodeParams(params.date, params.payload), [params.date, params.payload]);
-  const workout = payload?.workout ?? null;
-  const isRestDay = useMemo(() => {
-    if (!payload) {
-      return false;
-    }
-    if (payload.reason === "rest") {
-      return true;
-    }
-    return payload.ok === true && !payload.workout;
-  }, [payload]);
-  const isNoPlan = useMemo(() => {
-    if (!payload) {
-      return false;
-    }
-    if (payload.reason === "no_plan") {
-      return true;
-    }
-    return payload.ok === false && !payload.workout;
-  }, [payload]);
-  const isUnknown = !payload && !workout;
+
+  const dateISO = useMemo(() => getParamValue(params.date), [params.date]);
+  const isRestParam = useMemo(() => getParamValue(params.isRest), [params.isRest]);
+  const workoutId = useMemo(() => getParamValue(params.workoutId), [params.workoutId]);
+  const workoutType = useMemo(() => getParamValue(params.type), [params.type]);
+  const workoutNotes = useMemo(() => getParamValue(params.notes), [params.notes]);
+  const rawSets = useMemo(() => getParamValue(params.sets), [params.sets]);
+  const parsedSets = useMemo(() => parseSets(rawSets), [rawSets]);
+
+  const isRestDay = isRestParam === "true";
+  const hasWorkout = !isRestDay && workoutId.trim().length > 0;
+  const hasExercises = parsedSets.length > 0;
+  const headerTitle = isRestDay ? "Rest Day" : workoutType || "Day View";
+  const friendlyDate = useMemo(() => (dateISO ? formatFriendlyDate(dateISO) : "Unknown date"), [dateISO]);
 
   const [completionStates, setCompletionStates] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
-    if (workout?.exercises && workout.exercises.length > 0) {
-      const initialState = workout.exercises.reduce<Record<string, boolean>>((acc, exercise) => {
+    if (hasExercises) {
+      const initialState = parsedSets.reduce<Record<string, boolean>>((acc, exercise) => {
         acc[exercise.id] = false;
         return acc;
       }, {});
       setCompletionStates(initialState);
-    } else {
-      setCompletionStates({});
+      return;
     }
-  }, [workout?.id, workout?.exercises]);
+    setCompletionStates({});
+  }, [hasExercises, parsedSets]);
 
   const logCompletionMutation = useMutation({
     mutationFn: async ({ exerciseId, completed }: LogCompletionInput) => {
@@ -129,14 +115,19 @@ export default function DayViewScreen() {
       if (!user?.id) {
         throw new Error("User required");
       }
-      if (!workout) {
+      if (!hasWorkout) {
         throw new Error("Workout not available");
       }
-      console.log("[DayView] log_workout_completion invoked", { exerciseId, completed, dateISO });
+      console.log("[DayView] log_workout_completion invoked", {
+        exerciseId,
+        completed,
+        date: dateISO,
+        workoutId,
+      });
       const { error } = await supabase.functions.invoke("log_workout_completion", {
         body: {
           user_id: user.id,
-          workout_id: workout.id,
+          workout_id: workoutId,
           exercise_id: exerciseId,
           completed,
           date: dateISO,
@@ -156,6 +147,10 @@ export default function DayViewScreen() {
   });
 
   const handleToggleExercise = (exerciseId: string) => {
+    if (!hasWorkout) {
+      Alert.alert("Workout unavailable", "We couldn't find this workout. Try another date.");
+      return;
+    }
     setCompletionStates((prev) => {
       const previous = prev[exerciseId] ?? false;
       const next = { ...prev, [exerciseId]: !previous };
@@ -163,23 +158,6 @@ export default function DayViewScreen() {
       return next;
     });
   };
-
-  const goToCoach = () => {
-    router.push("/(tabs)/coach");
-  };
-
-  const headerTitle = useMemo(() => {
-    if (isNoPlan) {
-      return "No Plan";
-    }
-    if (isRestDay) {
-      return "Rest Day";
-    }
-    if (workout?.label) {
-      return workout.label;
-    }
-    return "Day View";
-  }, [isNoPlan, isRestDay, workout?.label]);
 
   return (
     <View style={styles.container} testID="day-view-screen">
@@ -196,22 +174,9 @@ export default function DayViewScreen() {
       >
         <View style={styles.heroCard}>
           <Text style={styles.heroLabel}>Selected Day</Text>
-          <Text style={styles.heroDate}>{dateISO ? formatFriendlyDate(dateISO) : "Unknown date"}</Text>
-          {workout?.label ? <Text style={styles.heroWorkout}>{workout.label}</Text> : null}
+          <Text style={styles.heroDate}>{friendlyDate}</Text>
+          {!isRestDay && workoutType ? <Text style={styles.heroWorkout}>{workoutType}</Text> : null}
         </View>
-
-        {isNoPlan ? (
-          <View style={styles.noPlanCard}>
-            <Text style={styles.noPlanTitle}>No training plan yet</Text>
-            <Text style={styles.noPlanSubtitle}>
-              Visit the Coach tab to build your custom program before logging workouts here.
-            </Text>
-            <TouchableOpacity style={styles.noPlanButton} onPress={goToCoach} testID="day-view-coach-button" activeOpacity={0.8}>
-              <Text style={styles.noPlanButtonText}>Go to Coach</Text>
-              <ArrowRight size={18} color={Colors.background} />
-            </TouchableOpacity>
-          </View>
-        ) : null}
 
         {isRestDay ? (
           <View style={styles.restCard}>
@@ -223,18 +188,18 @@ export default function DayViewScreen() {
           </View>
         ) : null}
 
-        {isUnknown ? (
-          <View style={styles.unknownCard}>
-            <Text style={styles.unknownTitle}>We couldn&apos;t load this day.</Text>
-            <Text style={styles.unknownSubtitle}>Try tapping the date again to refresh the workout details.</Text>
+        {!isRestDay && workoutNotes.trim().length > 0 ? (
+          <View style={styles.notesCard}>
+            <Text style={styles.notesTitle}>Coach Notes</Text>
+            <Text style={styles.notesBody}>{workoutNotes}</Text>
           </View>
         ) : null}
 
-        {workout && workout.exercises && workout.exercises.length > 0 ? (
+        {!isRestDay && hasExercises ? (
           <View style={styles.exercisesSection}>
             <Text style={styles.sectionTitle}>Workout Breakdown</Text>
             <View style={styles.exercisesCard}>
-              {workout.exercises.map((exercise) => {
+              {parsedSets.map((exercise) => {
                 const completed = completionStates[exercise.id] ?? false;
                 return (
                   <TouchableOpacity
@@ -280,6 +245,13 @@ export default function DayViewScreen() {
             </View>
           </View>
         ) : null}
+
+        {!isRestDay && !hasExercises ? (
+          <View style={styles.emptyCard}>
+            <Text style={styles.emptyTitle}>No exercises assigned.</Text>
+            <Text style={styles.emptySubtitle}>Your coach hasn&apos;t programmed sets for this day yet.</Text>
+          </View>
+        ) : null}
       </ScrollView>
     </View>
   );
@@ -323,54 +295,41 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: Colors.textSecondary,
   },
-  noPlanCard: {
+  notesCard: {
     padding: 24,
-    borderRadius: 28,
-    backgroundColor: "#1d0f0f",
+    borderRadius: 24,
+    backgroundColor: "#131313",
     borderWidth: 1,
-    borderColor: "rgba(255, 46, 46, 0.35)",
-    gap: 16,
+    borderColor: "rgba(255,255,255,0.08)",
+    gap: 12,
   },
-  noPlanTitle: {
-    fontSize: 20,
+  notesTitle: {
+    fontSize: 15,
     fontWeight: "700" as const,
-    color: "#FF8080",
+    color: Colors.text,
   },
-  noPlanSubtitle: {
+  notesBody: {
     fontSize: 14,
     color: "rgba(255,255,255,0.75)",
     lineHeight: 20,
   },
-  noPlanButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 10,
-    paddingVertical: 14,
-    borderRadius: 16,
-    backgroundColor: Colors.primary,
-  },
-  noPlanButtonText: {
-    color: Colors.background,
-    fontSize: 15,
-    fontWeight: "700" as const,
-  },
-  unknownCard: {
+  emptyCard: {
     padding: 24,
-    borderRadius: 28,
-    backgroundColor: "#311b4b",
+    borderRadius: 24,
+    backgroundColor: "#18181b",
     borderWidth: 1,
-    borderColor: "rgba(180, 108, 255, 0.4)",
-    gap: 12,
+    borderColor: "rgba(255,255,255,0.05)",
+    gap: 8,
+    alignItems: "flex-start",
   },
-  unknownTitle: {
+  emptyTitle: {
     fontSize: 18,
     fontWeight: "700" as const,
-    color: "#E5D7FF",
+    color: Colors.text,
   },
-  unknownSubtitle: {
+  emptySubtitle: {
     fontSize: 14,
-    color: "rgba(229,215,255,0.8)",
+    color: Colors.textSecondary,
     lineHeight: 20,
   },
   restCard: {

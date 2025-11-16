@@ -17,7 +17,7 @@ import { useSupabaseUser } from "@/hooks/useSupabaseUser";
 import { useRouter } from "expo-router";
 import { supabase, isSupabaseConfigured } from "@/lib/supabase";
 
-type ComposeTodayExercise = {
+type ComposeTodaySet = {
   id: string;
   name: string;
   sets?: number | null;
@@ -27,16 +27,18 @@ type ComposeTodayExercise = {
 };
 
 type ComposeTodayWorkout = {
-  id: string;
-  label: string;
+  id?: string;
+  label?: string | null;
+  type?: string | null;
+  notes?: string | null;
   workout_date: string;
-  exercises?: ComposeTodayExercise[] | null;
+  sets?: ComposeTodaySet[] | null;
 };
 
 type ComposeTodayResponse = {
-  ok: boolean;
-  workout: ComposeTodayWorkout | null;
-  reason?: "rest" | "no_plan" | string;
+  ok?: boolean;
+  workout?: ComposeTodayWorkout | null;
+  workout_id?: string | null;
 };
 
 function formatLocalISO(date: Date) {
@@ -92,18 +94,35 @@ export default function CalendarScreen() {
         const { data, error: fnError } = await supabase.functions.invoke<ComposeTodayResponse>("compose_today", {
           body: { user_id: user.id, date: dateISO },
         });
+        console.log("[Calendar] compose_today response", data);
+        console.error("[Calendar] compose_today error", fnError);
         if (fnError) {
-          console.error("[Calendar] compose_today error", fnError);
           throw fnError;
         }
-        console.log("[Calendar] compose_today response", data);
-        const responsePayload: ComposeTodayResponse | null = data ?? null;
-        const serialized = encodeURIComponent(JSON.stringify(responsePayload));
+        const noWorkout = !data || data.ok === false || !data.workout;
+        if (noWorkout) {
+          router.push({
+            pathname: "/day-view",
+            params: {
+              date: dateISO,
+              isRest: "true",
+            },
+          });
+          return;
+        }
+        const workoutDate = data.workout?.workout_date ?? dateISO;
+        const workoutId = data.workout_id ?? data.workout?.id ?? "";
+        const workoutType = data.workout?.type ?? data.workout?.label ?? "Session";
+        const workoutNotes = data.workout?.notes ?? "";
+        const workoutSets = JSON.stringify(data.workout?.sets ?? []);
         router.push({
           pathname: "/day-view",
           params: {
-            date: dateISO,
-            payload: serialized,
+            date: workoutDate,
+            workoutId,
+            type: workoutType,
+            notes: workoutNotes,
+            sets: workoutSets,
           },
         });
       } catch (err) {
