@@ -52,7 +52,7 @@ export default function CalendarScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user } = useSupabaseUser();
-  const staticToday = useMemo(() => new Date(2025, 10, 15), []);
+  const staticToday = useMemo(() => new Date(2025, 10, 16), []);
   const [currentDate, setCurrentDate] = useState(() => {
     return new Date(2025, 10, 1);
   });
