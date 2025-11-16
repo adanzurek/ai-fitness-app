@@ -33,9 +33,23 @@ type LogCompletionInput = {
   previous: boolean;
 };
 
+function parseLocalISODate(dateISO: string) {
+  if (!dateISO) {
+    return null;
+  }
+  const [year, month, day] = dateISO.split("-").map((segment) => Number(segment));
+  if ([year, month, day].some((value) => Number.isNaN(value))) {
+    return null;
+  }
+  return new Date(year, month - 1, day);
+}
+
 function formatFriendlyDate(dateISO: string) {
-  const date = new Date(dateISO);
-  return date.toLocaleDateString("en-US", {
+  const localDate = parseLocalISODate(dateISO);
+  if (!localDate) {
+    return "Unknown date";
+  }
+  return localDate.toLocaleDateString("en-US", {
     month: "long",
     day: "numeric",
     year: "numeric",

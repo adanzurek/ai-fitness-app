@@ -258,11 +258,20 @@ function HomeScreenContent() {
           start_date: todayIso,
         },
       });
-      if (weekError) {
-        console.log("[Home] generate_week error", weekError);
-        throw new Error("Unable to schedule workouts right now.");
+      let planMessage = "Your new week is on the calendar.";
+      let weekScheduled = Boolean(weekData?.ok);
+      if (weekError || !weekScheduled) {
+        if (weekError) {
+          console.log("[Home] generate_week error", weekError);
+        }
+        const fallbackScheduled = await hasCalendarWorkoutsScheduled(userId, todayIso, scheduleDays);
+        if (!fallbackScheduled) {
+          throw new Error("Plan created but workouts were not scheduled. Try again.");
+        }
+        weekScheduled = true;
+        planMessage = "Plan created and synced with existing calendar workouts.";
       }
-      if (!weekData?.ok) {
+      if (!weekScheduled) {
         throw new Error("Plan created but workouts were not scheduled. Try again.");
       }
       await Promise.allSettled([
@@ -271,7 +280,7 @@ function HomeScreenContent() {
         refreshGoals(),
         refreshStreak(),
       ]);
-      Alert.alert("Plan ready", "Your new week is on the calendar.");
+      Alert.alert("Plan ready", planMessage);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to generate plan.";
       Alert.alert("Something went wrong", message);
@@ -793,7 +802,7 @@ function useTodayWorkout(userId: string | null) {
         return;
       }
       const { data: composed, error: composeError } = await supabase.functions.invoke("compose_today", {
-        body: { user_id: userId },
+        body: { user: userId, dateISO: todayIso },
       });
       if (composeError) {
         console.log("[Home] compose_today error", composeError);
@@ -1019,6 +1028,30 @@ function getTodayISO() {
   const month = String(now.getMonth() + 1).padStart(2, "0");
   const day = String(now.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+async function hasCalendarWorkoutsScheduled(userId: string, startISO: string, days: number) {
+  try {
+    const startDate = new Date(startISO);
+    const endDate = new Date(startDate);
+    endDate.setDate(startDate.getDate() + Math.max(days - 1, 0));
+    const endISO = getISOFromDate(endDate);
+    const { data, error } = await supabase
+      .from("workouts")
+      .select("id")
+      .eq("user_id", userId)
+      .gte("workout_date", startISO)
+      .lte("workout_date", endISO)
+      .limit(1);
+    if (error) {
+      console.log("[Home] hasCalendarWorkoutsScheduled error", error);
+      return false;
+    }
+    return Boolean(data && data.length > 0);
+  } catch (error) {
+    console.log("[Home] hasCalendarWorkoutsScheduled exception", error);
+    return false;
+  }
 }
 
 function computeStreak(rows: any[]): number {

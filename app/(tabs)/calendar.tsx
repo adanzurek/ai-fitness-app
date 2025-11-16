@@ -81,6 +81,9 @@ export default function CalendarScreen() {
 
   const handleSelectDate = useCallback(
     async (dateISO: string) => {
+      if (isComposing) {
+        return;
+      }
       setSelectedDate(dateISO);
       if (!isSupabaseConfigured) {
         Alert.alert("Supabase not configured", "Configure Supabase to load workouts for selected dates.");
@@ -95,10 +98,12 @@ export default function CalendarScreen() {
         setIsComposing(true);
         console.log("[Calendar] compose_today invoked", { dateISO, user: user.id });
         const { data, error: fnError } = await supabase.functions.invoke<ComposeTodayResponse>("compose_today", {
-          body: { user_id: user.id, date: dateISO },
+          body: { user: user.id, dateISO },
         });
         console.log("[Calendar] compose_today response", data);
-        console.error("[Calendar] compose_today error", fnError);
+        if (fnError) {
+          console.error("[Calendar] compose_today error", fnError);
+        }
         if (fnError) {
           throw fnError;
         }
@@ -136,7 +141,7 @@ export default function CalendarScreen() {
         setIsComposing(false);
       }
     },
-    [router, user]
+    [isComposing, router, user]
   );
 
   const changeMonth = (delta: number) => {

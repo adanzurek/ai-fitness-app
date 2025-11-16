@@ -21,8 +21,8 @@ const FUNCTION_TEMPLATES = {
   compose_today: (userId: string) =>
     JSON.stringify(
       {
-        user_id: userId,
-        todayISO: new Date().toISOString().split("T")[0],
+        user: userId,
+        dateISO: new Date().toISOString().split("T")[0],
       },
       null,
       2,
