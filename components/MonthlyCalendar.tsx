@@ -40,25 +40,29 @@ function getWorkoutColors(block: string): WorkoutTypeColors {
 function getDaysInMonth(year: number, month: number): Date[] {
   const firstDay = new Date(year, month, 1);
   const lastDay = new Date(year, month + 1, 0);
-  const daysInMonth = lastDay.getDate();
-  const startDayOfWeek = firstDay.getDay();
+  const totalDays = lastDay.getDate();
+  const leading = firstDay.getDay();
 
   const days: Date[] = [];
 
-  for (let i = 0; i < startDayOfWeek; i++) {
-    const prevDate = new Date(year, month, -startDayOfWeek + i + 1);
+  for (let offset = leading; offset > 0; offset -= 1) {
+    const prevDate = new Date(firstDay);
+    prevDate.setDate(firstDay.getDate() - offset);
     days.push(prevDate);
   }
 
-  for (let i = 1; i <= daysInMonth; i++) {
-    days.push(new Date(year, month, i));
+  for (let index = 0; index < totalDays; index += 1) {
+    const current = new Date(firstDay);
+    current.setDate(firstDay.getDate() + index);
+    days.push(current);
   }
 
-  const remainingDays = 7 - (days.length % 7);
-  if (remainingDays < 7) {
-    for (let i = 1; i <= remainingDays; i++) {
-      days.push(new Date(year, month + 1, i));
-    }
+  const trailing = (7 - (days.length % 7)) % 7;
+
+  for (let offset = 1; offset <= trailing; offset += 1) {
+    const nextDate = new Date(lastDay);
+    nextDate.setDate(lastDay.getDate() + offset);
+    days.push(nextDate);
   }
 
   return days;
@@ -110,9 +114,11 @@ export default function MonthlyCalendar({ year, month, days, loading, error, onS
             </View>
           )}
           <View style={styles.weekdayRow}>
-            {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day, i) => (
-              <View key={i} style={[styles.weekdayCell, { width: DAY_SIZE }]}>
-                <Text style={styles.weekdayText}>{day}</Text>
+            {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((dayLabel, index) => (
+              <View key={dayLabel} style={[styles.weekdayCell, { width: DAY_SIZE }]}
+                testID={`calendar-weekday-${index}`}
+              >
+                <Text style={styles.weekdayText}>{dayLabel}</Text>
               </View>
             ))}
           </View>
@@ -230,17 +236,25 @@ const styles = StyleSheet.create({
   weekdayRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 8,
+    marginBottom: 12,
+    paddingHorizontal: 4,
   },
   weekdayCell: {
     alignItems: 'center',
+    paddingVertical: 6,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
   },
   weekdayText: {
     fontSize: 12,
-    fontWeight: '600' as const,
-    color: Colors.textMuted,
+    fontWeight: '700' as const,
+    color: Colors.textSecondary,
+    letterSpacing: 0.5,
   },
   daysGrid: {
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255, 255, 255, 0.04)',
+    paddingTop: 12,
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,

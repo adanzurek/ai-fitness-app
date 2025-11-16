@@ -52,11 +52,14 @@ export default function CalendarScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user } = useSupabaseUser();
-  const staticToday = useMemo(() => new Date(2025, 10, 16), []);
+  const todayReference = useMemo(() => {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  }, []);
   const [currentDate, setCurrentDate] = useState(() => {
-    return new Date(2025, 10, 1);
+    return new Date(todayReference.getFullYear(), todayReference.getMonth(), 1);
   });
-  const [selectedDate, setSelectedDate] = useState(() => formatLocalISO(staticToday));
+  const [selectedDate, setSelectedDate] = useState(() => formatLocalISO(todayReference));
   const [isComposing, setIsComposing] = useState(false);
   const [dayError, setDayError] = useState<string | null>(null);
 
@@ -67,14 +70,14 @@ export default function CalendarScreen() {
 
   useEffect(() => {
     if (
-      currentYear === staticToday.getFullYear() &&
-      currentMonth === staticToday.getMonth()
+      currentYear === todayReference.getFullYear() &&
+      currentMonth === todayReference.getMonth()
     ) {
-      setSelectedDate(formatLocalISO(staticToday));
+      setSelectedDate(formatLocalISO(todayReference));
       return;
     }
     setSelectedDate(formatLocalISO(new Date(currentYear, currentMonth, 1)));
-  }, [currentYear, currentMonth, staticToday]);
+  }, [currentYear, currentMonth, todayReference]);
 
   const handleSelectDate = useCallback(
     async (dateISO: string) => {
@@ -171,7 +174,7 @@ export default function CalendarScreen() {
           loading={loading}
           error={error}
           onSelectDate={handleSelectDate}
-          todayOverride={staticToday}
+          todayOverride={todayReference}
           selectedDate={selectedDate}
         />
 
