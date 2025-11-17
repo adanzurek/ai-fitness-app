@@ -95,14 +95,17 @@ export default function DayViewScreen() {
 
   const dateISO = useMemo(() => getParamValue(params.date), [params.date]);
   const isRestParam = useMemo(() => getParamValue(params.isRest), [params.isRest]);
-  const workoutId = useMemo(() => getParamValue(params.workoutId), [params.workoutId]);
+  const workoutIdRaw = useMemo(() => getParamValue(params.workoutId), [params.workoutId]);
+  const workoutId = workoutIdRaw.trim();
   const workoutType = useMemo(() => getParamValue(params.type), [params.type]);
   const workoutNotes = useMemo(() => getParamValue(params.notes), [params.notes]);
   const rawSets = useMemo(() => getParamValue(params.sets), [params.sets]);
   const parsedSets = useMemo(() => parseSets(rawSets), [rawSets]);
 
   const isRestDay = isRestParam === "true";
-  const hasWorkout = !isRestDay && workoutId.trim().length > 0;
+  const hasWorkout = !isRestDay && workoutId.length > 0;
+  const isPreviewWorkout = hasWorkout && workoutId.startsWith("compose-");
+  const canLogCompletion = hasWorkout && !isPreviewWorkout;
   const hasExercises = parsedSets.length > 0;
   const headerTitle = isRestDay ? "Rest Day" : workoutType || "Day View";
   const friendlyDate = useMemo(() => (dateISO ? formatFriendlyDate(dateISO) : "Unknown date"), [dateISO]);
@@ -129,7 +132,7 @@ export default function DayViewScreen() {
       if (!user?.id) {
         throw new Error("User required");
       }
-      if (!hasWorkout) {
+      if (!canLogCompletion) {
         throw new Error("Workout not available");
       }
       console.log("[DayView] log_workout_completion invoked", {
@@ -161,8 +164,12 @@ export default function DayViewScreen() {
   });
 
   const handleToggleExercise = (exerciseId: string) => {
-    if (!hasWorkout) {
-      Alert.alert("Workout unavailable", "We couldn't find this workout. Try another date.");
+    if (!canLogCompletion) {
+      const title = isPreviewWorkout ? "Preview workout" : "Workout unavailable";
+      const message = isPreviewWorkout
+        ? "This workout hasn't been scheduled in your calendar yet, so logging sets isn't available."
+        : "We couldn't find this workout. Try another date.";
+      Alert.alert(title, message);
       return;
     }
     setCompletionStates((prev) => {

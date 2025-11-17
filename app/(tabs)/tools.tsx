@@ -139,7 +139,7 @@ export default function ToolsScreen() {
   const parsedPayload = useMemo(() => {
     try {
       return payloadText.trim() ? JSON.parse(payloadText) : {};
-    } catch (error) {
+    } catch {
       return null;
     }
   }, [payloadText]);

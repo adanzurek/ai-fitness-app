@@ -4,7 +4,6 @@ import {
   Alert,
   Animated,
   Easing,
-  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -15,11 +14,10 @@ import {
   ViewStyle,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useNavigation, useFocusEffect } from "@react-navigation/native";
+import { useFocusEffect } from "@react-navigation/native";
 import { useRouter } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import { Calendar, Flame, Sparkles, Dumbbell, Wand2, ArrowRight } from "lucide-react-native";
-import type { NavigationProp } from "@react-navigation/native";
 import Colors from "../../constants/colors";
 import { supabase } from "../../lib/supabase";
 import type { ProfileSchedule } from "../../types/supabase";
@@ -44,6 +42,9 @@ type HomeWorkoutExercise = {
   name: string;
   sets?: number | null;
   reps?: number | string | null;
+  intensity?: number | string | null;
+  load?: number | string | null;
+  exercise_id?: string | null;
 };
 
 type HomeWorkout = {
@@ -52,6 +53,50 @@ type HomeWorkout = {
   workout_date: string;
   exercises: HomeWorkoutExercise[];
   completed?: boolean | null;
+  notes?: string | null;
+};
+
+type ExerciseOutcomeStatus = "hit_target" | "missed_reps" | "skipped";
+
+type RepDeltaBucket = "minus_1" | "minus_2" | "minus_3_plus" | "could_not_finish_set";
+
+type ExerciseOutcome = {
+  exercise_id: string;
+  status: ExerciseOutcomeStatus;
+  rep_delta_bucket?: RepDeltaBucket | null;
+};
+
+type WorkoutExerciseSummary = {
+  exerciseId: string;
+  name: string;
+  totalSets: number;
+  repsLabel: string | null;
+  secondaryLabel: string | null;
+};
+
+type ComposeTodaySet = {
+  id?: string;
+  name?: string;
+  sets?: number | null;
+  reps?: number | string | null;
+};
+
+type ComposeTodayWorkout = {
+  id?: string;
+  workout_id?: string;
+  label?: string | null;
+  type?: string | null;
+  notes?: string | null;
+  workout_date?: string;
+  exercises?: ComposeTodaySet[] | null;
+  sets?: ComposeTodaySet[] | null;
+};
+
+type ComposeTodayResponse = {
+  ok?: boolean;
+  code?: string;
+  workout?: ComposeTodayWorkout | null;
+  workout_id?: string | null;
 };
 
 type GoalProgress = {
@@ -81,11 +126,17 @@ type TodaySectionProps = {
   hasPlan: boolean;
   isRestDay: boolean;
   workout: HomeWorkout | null;
-  onPressStartWorkout: () => void;
   onPressGeneratePlan: () => void;
   generatingPlan: boolean;
   scheduleDays: number;
   error: string | null;
+  exerciseSummaries: WorkoutExerciseSummary[];
+  exerciseOutcomes: Record<string, ExerciseOutcome>;
+  onChangeExerciseOutcome: (exerciseId: string, status: ExerciseOutcomeStatus) => void;
+  onSelectRepBucket: (exerciseId: string, bucket: RepDeltaBucket) => void;
+  onFinishWorkout: () => void;
+  finishingWorkout: boolean;
+  workoutCompleted: boolean;
 };
 
 type HeaderUserGreetingProps = {
@@ -123,6 +174,13 @@ const GOAL_EXERCISES = [
 
 const DEFAULT_SCHEDULE_DAYS = 4;
 
+const REP_BUCKET_OPTIONS: { label: string; value: RepDeltaBucket }[] = [
+  { label: "Missed by 1 rep", value: "minus_1" },
+  { label: "Missed by 2 reps", value: "minus_2" },
+  { label: "Missed by 3+ reps", value: "minus_3_plus" },
+  { label: "Couldn't finish last set", value: "could_not_finish_set" },
+];
+
 class HomeErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean }> {
   constructor(props: { children: React.ReactNode }) {
     super(props);
@@ -159,7 +217,6 @@ export default function HomeScreen() {
 }
 
 function HomeScreenContent() {
-  const navigation = useNavigation<NavigationProp<Record<string, object | undefined>>>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { user, loading: userLoading } = useSupabaseUser();
@@ -185,7 +242,60 @@ function HomeScreenContent() {
     loading: workoutLoading,
     error: todayError,
     refresh: refreshTodayWorkout,
+    composeTodayWorkout,
   } = useTodayWorkout(userId);
+
+  const exerciseSummaries = useMemo(
+    () => (todayWorkout ? summarizeWorkoutExercises(todayWorkout) : []),
+    [todayWorkout],
+  );
+  const [exerciseOutcomes, setExerciseOutcomes] = useState<Record<string, ExerciseOutcome>>({});
+  const [finishingWorkout, setFinishingWorkout] = useState<boolean>(false);
+  const [workoutCompleted, setWorkoutCompleted] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!todayWorkout) {
+      setExerciseOutcomes({});
+      setWorkoutCompleted(false);
+      return;
+    }
+    const defaults = exerciseSummaries.reduce<Record<string, ExerciseOutcome>>((acc, summary) => {
+      acc[summary.exerciseId] = {
+        exercise_id: summary.exerciseId,
+        status: "hit_target",
+        rep_delta_bucket: null,
+      };
+      return acc;
+    }, {});
+    setExerciseOutcomes(defaults);
+    setWorkoutCompleted(Boolean(todayWorkout.completed));
+  }, [exerciseSummaries, todayWorkout]);
+
+  const handleExerciseOutcomeChange = useCallback((exerciseId: string, status: ExerciseOutcomeStatus) => {
+    setExerciseOutcomes((prev) => {
+      const existing = prev[exerciseId] ?? { exercise_id: exerciseId, status: "hit_target", rep_delta_bucket: null };
+      const next: ExerciseOutcome = {
+        exercise_id: exerciseId,
+        status,
+        rep_delta_bucket: status === "missed_reps" ? existing.rep_delta_bucket ?? "minus_1" : null,
+      };
+      return { ...prev, [exerciseId]: next };
+    });
+  }, []);
+
+  const handleRepBucketChange = useCallback((exerciseId: string, bucket: RepDeltaBucket) => {
+    setExerciseOutcomes((prev) => {
+      const existing = prev[exerciseId] ?? { exercise_id: exerciseId, status: "missed_reps", rep_delta_bucket: bucket };
+      return {
+        ...prev,
+        [exerciseId]: {
+          exercise_id: exerciseId,
+          status: "missed_reps",
+          rep_delta_bucket: bucket,
+        },
+      };
+    });
+  }, []);
 
   const {
     streak,
@@ -237,70 +347,60 @@ function HomeScreenContent() {
       Alert.alert("Sign in required", "Please sign in to generate a plan.");
       return;
     }
-    console.log("[Home] Generating plan for", userId);
+    console.log("[Home] Composing today's workout for", userId);
     setGeneratingPlan(true);
     try {
-      const { data: planData, error: planError } = await supabase.functions.invoke("generate_plan_ai", {
-        body: { user_id: userId },
-      });
-      if (planError) {
-        console.log("[Home] generate_plan_ai error", planError);
-        throw new Error("Unable to generate plan.");
-      }
-      if (!planData?.ok) {
-        throw new Error("Coach could not generate a plan. Try again later.");
-      }
-      const todayIso = getTodayISO();
-      const { data: weekData, error: weekError } = await supabase.functions.invoke("generate_week", {
-        body: {
-          user_id: userId,
-          days: scheduleDays,
-          start_date: todayIso,
-        },
-      });
-      let planMessage = "Your new week is on the calendar.";
-      let weekScheduled = Boolean(weekData?.ok);
-      if (weekError || !weekScheduled) {
-        if (weekError) {
-          console.log("[Home] generate_week error", weekError);
-        }
-        const fallbackScheduled = await hasCalendarWorkoutsScheduled(userId, todayIso, scheduleDays);
-        if (!fallbackScheduled) {
-          throw new Error("Plan created but workouts were not scheduled. Try again.");
-        }
-        weekScheduled = true;
-        planMessage = "Plan created and synced with existing calendar workouts.";
-      }
-      if (!weekScheduled) {
-        throw new Error("Plan created but workouts were not scheduled. Try again.");
-      }
-      await Promise.allSettled([
-        refreshPlan(),
-        refreshTodayWorkout(),
-        refreshGoals(),
-        refreshStreak(),
-      ]);
-      Alert.alert("Plan ready", planMessage);
+      await composeTodayWorkout();
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to generate plan.";
+      const message = err instanceof Error ? err.message : "Failed to generate today’s workout.";
       Alert.alert("Something went wrong", message);
     } finally {
       setGeneratingPlan(false);
     }
-  }, [refreshGoals, refreshPlan, refreshStreak, refreshTodayWorkout, scheduleDays, userId]);
-
-  const handleStartWorkout = useCallback(() => {
-    if (!todayWorkout) {
-      return;
-    }
-    console.log("[Home] Navigating to WorkoutDetail", todayWorkout.id);
-    navigation.navigate("WorkoutDetail", { workoutId: todayWorkout.id });
-  }, [navigation, todayWorkout]);
+  }, [composeTodayWorkout, userId]);
 
   const handleProfilePress = useCallback(() => {
     console.log("[Home] Navigating to profile");
     router.push("/profile");
   }, [router]);
+
+  const handleFinishWorkout = useCallback(async () => {
+    if (!todayWorkout) {
+      return;
+    }
+    try {
+      setFinishingWorkout(true);
+      const exercisesPayload = exerciseSummaries.map((summary) => {
+        const outcome = exerciseOutcomes[summary.exerciseId];
+        if (!outcome || outcome.status === "hit_target") {
+          return { exercise_id: summary.exerciseId, status: "hit_target", rep_delta_bucket: null };
+        }
+        return {
+          exercise_id: summary.exerciseId,
+          status: outcome.status,
+          rep_delta_bucket: outcome.status === "missed_reps" ? outcome.rep_delta_bucket ?? "minus_1" : null,
+        };
+      });
+      const payload = {
+        workout_id: todayWorkout.id,
+        completed: true,
+        completed_at: new Date().toISOString(),
+        exercises: exercisesPayload,
+      };
+      const { error } = await supabase.functions.invoke("finish_workout", { body: payload });
+      if (error) {
+        console.log("[Home] finish_workout error", error);
+        throw error;
+      }
+      setWorkoutCompleted(true);
+      Alert.alert("Workout completed", "Nice work — workout completed.");
+    } catch (err) {
+      console.error("[Home] Unable to finish workout", err);
+      Alert.alert("Could not finish workout", "Please try again.");
+    } finally {
+      setFinishingWorkout(false);
+    }
+  }, [exerciseOutcomes, exerciseSummaries, todayWorkout]);
 
   if (userLoading) {
     return (
@@ -350,11 +450,17 @@ function HomeScreenContent() {
           hasPlan={Boolean(plan)}
           isRestDay={isRestDay}
           workout={todayWorkout}
-          onPressStartWorkout={handleStartWorkout}
           onPressGeneratePlan={handleGeneratePlan}
           generatingPlan={generatingPlan}
           scheduleDays={scheduleDays}
           error={todayError}
+          exerciseSummaries={exerciseSummaries}
+          exerciseOutcomes={exerciseOutcomes}
+          onChangeExerciseOutcome={handleExerciseOutcomeChange}
+          onSelectRepBucket={handleRepBucketChange}
+          onFinishWorkout={handleFinishWorkout}
+          finishingWorkout={finishingWorkout}
+          workoutCompleted={workoutCompleted}
         />
         <GoalsSection loading={goalsLoading} goals={goals} />
       </ScrollView>
@@ -418,18 +524,216 @@ function TodaySection({
   hasPlan,
   isRestDay,
   workout,
-  onPressStartWorkout,
   onPressGeneratePlan,
   generatingPlan,
   scheduleDays,
   error,
+  exerciseSummaries,
+  exerciseOutcomes,
+  onChangeExerciseOutcome,
+  onSelectRepBucket,
+  onFinishWorkout,
+  finishingWorkout,
+  workoutCompleted,
 }: TodaySectionProps) {
+  const [openPicker, setOpenPicker] = useState<string | null>(null);
+
   if (loading || planLoading) {
     return (
       <View style={styles.todayCard} testID="today-card-loading">
         <SkeletonBlock width={120} height={20} borderRadius={10} style={styles.todaySkeleton} />
         <SkeletonBlock width="100%" height={32} borderRadius={12} style={styles.todaySkeleton} />
         <SkeletonBlock width="60%" height={16} borderRadius={8} />
+      </View>
+    );
+  }
+
+  if (error) {
+    return (
+      <View style={styles.todayCard}>
+        <Text style={styles.errorTitle}>Unable to load workout</Text>
+        <Text style={styles.errorSubtitle}>{error}</Text>
+      </View>
+    );
+  }
+
+  if (workout) {
+    const exerciseCount = workout.exercises.length;
+    const totalExercises = exerciseSummaries.length;
+    const readyCount = exerciseSummaries.reduce((count, summary) => {
+      const status = exerciseOutcomes[summary.exerciseId]?.status ?? "hit_target";
+      return status === "hit_target" ? count + 1 : count;
+    }, 0);
+
+    return (
+      <View style={styles.todayCard} testID="today-workout-card">
+        <View style={styles.todayBadgeRow}>
+          <View style={styles.todayBadgeIcon}>
+            <Calendar size={16} color={Colors.text} />
+            <Text style={styles.todayBadgeText}>Today&apos;s Workout</Text>
+          </View>
+          <View style={styles.workoutTypeBadge}>
+            <Text style={styles.workoutTypeBadgeText}>{workout.label}</Text>
+          </View>
+        </View>
+        <Text style={styles.workoutHeadline}>{workout.label}</Text>
+        <Text style={styles.workoutMeta}>{exerciseCount} exercises dialed in for you.</Text>
+        <Text style={styles.workoutNotes}>
+          {workout.notes?.trim().length ? workout.notes : "Focus on crisp reps and steady tempo."}
+        </Text>
+        {exerciseSummaries.length > 0 ? (
+          <View style={styles.outcomeSection}>
+            <Text style={styles.outcomeSectionTitle}>Workout Breakdown</Text>
+            {exerciseSummaries.map((summary) => {
+              const outcome = exerciseOutcomes[summary.exerciseId];
+              const status = outcome?.status ?? "hit_target";
+              const selectedBucket = outcome?.rep_delta_bucket ?? null;
+              const bucketLabel =
+                REP_BUCKET_OPTIONS.find((option) => option.value === selectedBucket)?.label ??
+                "Select details";
+              const isMissed = status === "missed_reps";
+              return (
+                <View key={summary.exerciseId} style={styles.exerciseCard}>
+                  <View style={styles.exerciseCardHeader}>
+                    <View style={styles.exerciseIconWrap}>
+                      <Dumbbell color={Colors.text} size={18} />
+                    </View>
+                    <View style={styles.exerciseTextGroup}>
+                      <Text style={styles.outcomeExercise}>{summary.name}</Text>
+                      <Text style={styles.outcomeSubtitle}>
+                        {summary.totalSets} sets{summary.repsLabel ? ` · ${summary.repsLabel}` : ""}
+                      </Text>
+                    </View>
+                  </View>
+                  <View style={styles.outcomeToggleRow}>
+                    <TouchableOpacity
+                      style={[
+                        styles.outcomeToggleButton,
+                        status === "hit_target" && styles.outcomeToggleButtonActive,
+                      ]}
+                      onPress={() => {
+                        onChangeExerciseOutcome(summary.exerciseId, "hit_target");
+                        setOpenPicker((prev) => (prev === summary.exerciseId ? null : prev));
+                      }}
+                    >
+                      <Text
+                        style={[
+                          styles.outcomeToggleText,
+                          status === "hit_target" && styles.outcomeToggleTextActive,
+                        ]}
+                      >
+                        Hit all reps
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[
+                        styles.outcomeToggleButton,
+                        isMissed && styles.outcomeToggleButtonActive,
+                      ]}
+                      onPress={() => {
+                        onChangeExerciseOutcome(summary.exerciseId, "missed_reps");
+                        if (!selectedBucket) {
+                          onSelectRepBucket(summary.exerciseId, "minus_1");
+                        }
+                        setOpenPicker(summary.exerciseId);
+                      }}
+                    >
+                      <Text
+                        style={[
+                          styles.outcomeToggleText,
+                          isMissed && styles.outcomeToggleTextActive,
+                        ]}
+                      >
+                        Missed reps
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                  {isMissed ? (
+                    <View style={styles.repPickerWrapper}>
+                      <TouchableOpacity
+                        style={styles.repPickerButton}
+                        onPress={() =>
+                          setOpenPicker((prev) =>
+                            prev === summary.exerciseId ? null : summary.exerciseId,
+                          )
+                        }
+                      >
+                        <Text style={styles.repPickerButtonText}>{bucketLabel}</Text>
+                        <ArrowRight size={16} color={Colors.textSecondary} />
+                      </TouchableOpacity>
+                      {openPicker === summary.exerciseId ? (
+                        <View style={styles.repPickerDropdown}>
+                          {REP_BUCKET_OPTIONS.map((option) => (
+                            <TouchableOpacity
+                              key={option.value}
+                              onPress={() => {
+                                onSelectRepBucket(summary.exerciseId, option.value);
+                                setOpenPicker(null);
+                              }}
+                              style={styles.repPickerOption}
+                            >
+                              <Text
+                                style={[
+                                  styles.repPickerOptionText,
+                                  option.value === selectedBucket &&
+                                    styles.repPickerOptionTextActive,
+                                ]}
+                              >
+                                {option.label}
+                              </Text>
+                            </TouchableOpacity>
+                          ))}
+                        </View>
+                      ) : null}
+                    </View>
+                  ) : null}
+                </View>
+              );
+            })}
+          </View>
+        ) : null}
+        <Text style={styles.finishHelperText}>
+          Use the controls above if you missed reps on any exercise.
+        </Text>
+        {totalExercises > 0 ? (
+          <View style={styles.progressPill}>
+            <Text style={styles.progressPillText}>
+              {readyCount} / {totalExercises} ready
+            </Text>
+          </View>
+        ) : null}
+        <TouchableOpacity
+          activeOpacity={0.85}
+          disabled={finishingWorkout || workoutCompleted || !workout}
+          onPress={onFinishWorkout}
+          style={[
+            styles.finishWorkoutButton,
+            (finishingWorkout || workoutCompleted || !workout) && styles.finishWorkoutButtonDisabled,
+          ]}
+          testID="finish-workout-button"
+        >
+          {finishingWorkout ? (
+            <ActivityIndicator color={Colors.background} />
+          ) : (
+            <Text style={styles.finishWorkoutButtonText}>
+              {workoutCompleted ? "Workout completed" : "Finish workout"}
+            </Text>
+          )}
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  if (isRestDay || (hasPlan && !workout)) {
+    return (
+      <View style={styles.todayCard} testID="rest-day-card">
+        <View style={styles.restBadge}>
+          <Sparkles color={Colors.text} size={22} />
+        </View>
+        <Text style={styles.restTitle}>Rest Day</Text>
+        <Text style={styles.restText}>
+          Recovery matters. Take a light walk or mobility work to stay primed.
+        </Text>
       </View>
     );
   }
@@ -465,61 +769,10 @@ function TodaySection({
     );
   }
 
-  if (error) {
-    return (
-      <View style={styles.todayCard}>
-        <Text style={styles.errorTitle}>Unable to load workout</Text>
-        <Text style={styles.errorSubtitle}>{error}</Text>
-      </View>
-    );
-  }
-
-  if (isRestDay || !workout) {
-    return (
-      <View style={styles.todayCard} testID="rest-day-card">
-        <View style={styles.restBadge}>
-          <Sparkles color={Colors.text} size={22} />
-        </View>
-        <Text style={styles.restTitle}>Rest Day</Text>
-        <Text style={styles.restText}>
-          Recovery matters. Take a light walk or mobility work to stay primed.
-        </Text>
-      </View>
-    );
-  }
-
-  const exerciseCount = workout.exercises.length;
-
   return (
-    <View style={styles.todayCard} testID="today-workout-card">
-      <View style={styles.todayHeader}>
-        <View style={styles.todayHeaderLeft}>
-          <Calendar size={20} color={Colors.primary} />
-          <Text style={styles.todayTitle}>Today&apos;s Workout</Text>
-        </View>
-        <View style={styles.workoutTypeBadge}>
-          <Text style={styles.workoutTypeBadgeText}>{workout.label}</Text>
-        </View>
-      </View>
-      <Text style={styles.workoutHeadline}>Let&apos;s make it count</Text>
-      <Text style={styles.workoutMeta}>{exerciseCount} exercises dialed in for you.</Text>
-      <View style={styles.workoutChipRow}>
-        {workout.exercises.slice(0, 3).map((exercise) => (
-          <View key={exercise.id} style={styles.workoutChip}>
-            <Dumbbell color={Colors.text} size={14} />
-            <Text style={styles.workoutChipText}>{exercise.name}</Text>
-          </View>
-        ))}
-      </View>
-      <TouchableOpacity
-        activeOpacity={0.85}
-        onPress={onPressStartWorkout}
-        style={styles.startWorkoutButton}
-        testID="start-workout-button"
-      >
-        <Text style={styles.startWorkoutButtonText}>Start Workout</Text>
-        <ArrowRight color={Colors.background} size={18} />
-      </TouchableOpacity>
+    <View style={styles.todayCard}>
+      <Text style={styles.workoutHeadline}>No workout scheduled</Text>
+      <Text style={styles.workoutMeta}>Check back later for your next session.</Text>
     </View>
   );
 }
@@ -713,19 +966,36 @@ function useCurrentPlan(userId: string | null) {
       setError(null);
     }
     try {
-      const { data, error: queryError } = await supabase
-        .from("plans")
-        .select("id, name, status, created_at")
-        .eq("user_id", userId)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (queryError) {
-        console.log("[Home] Plan query error", queryError);
+      const runPlanQuery = async (fields: string) =>
+        supabase
+          .from("plans")
+          .select(fields)
+          .eq("user_id", userId)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+      let planData: PlanData | null = null;
+      let planError: any = null;
+      let queryResult = await runPlanQuery("id, name, status, created_at");
+      planData = (queryResult.data as PlanData | null) ?? null;
+      planError = queryResult.error;
+      if (planError && planError.code === "42703") {
+        console.log("[Home] Plan query missing columns, retrying with fallback fields");
+        queryResult = await runPlanQuery("id, status, created_at");
+        planData = (queryResult.data as PlanData | null) ?? null;
+        planError = queryResult.error;
+      }
+      if (planError && planError.code === "42703") {
+        queryResult = await runPlanQuery("id, created_at");
+        planData = (queryResult.data as PlanData | null) ?? null;
+        planError = queryResult.error;
+      }
+      if (planError) {
+        console.log("[Home] Plan query error", planError);
         throw new Error("Unable to load plan");
       }
       if (mountedRef.current) {
-        setPlan(data ?? null);
+        setPlan(planData);
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Plan load failed";
@@ -766,6 +1036,46 @@ function useTodayWorkout(userId: string | null) {
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
+  const composeTodayWorkout = useCallback(
+    async (dateISO?: string) => {
+      if (!userId) {
+        throw new Error("Sign in required");
+      }
+      console.log("[Home] compose_today invoked", { dateISO });
+      const payload = dateISO ? { dateISO } : {};
+      const { data: composed, error: composeError } = await supabase.functions.invoke<ComposeTodayResponse>(
+        "compose_today",
+        {
+          body: payload,
+        },
+      );
+      if (composeError) {
+        console.log("[Home] compose_today error", composeError);
+        throw new Error("Unable to compose today's plan");
+      }
+      if (mountedRef.current) {
+        if (composed?.ok && composed.workout) {
+          const mergedWorkout =
+            composed.workout_id && typeof composed.workout_id === "string"
+              ? { ...composed.workout, workout_id: composed.workout_id }
+              : composed.workout;
+          setTodayWorkout(mapEdgeWorkout(mergedWorkout));
+          setIsRestDay(false);
+          return composed;
+        }
+        if (composed?.code === "NO_WORKOUT_TODAY") {
+          setTodayWorkout(null);
+          setIsRestDay(true);
+          return composed;
+        }
+        setTodayWorkout(null);
+        setIsRestDay(true);
+      }
+      throw new Error("Coach could not compose today's workout");
+    },
+    [userId],
+  );
+
   const fetchTodayWorkout = useCallback(async () => {
     if (!userId) {
       if (mountedRef.current) {
@@ -782,41 +1092,41 @@ function useTodayWorkout(userId: string | null) {
     }
     try {
       const todayIso = getTodayISO();
-      const { data: workoutRow, error: workoutError } = await supabase
-        .from("workouts")
-        .select("id, label, workout_date, completed, exercises")
-        .eq("user_id", userId)
-        .eq("workout_date", todayIso)
-        .limit(1)
-        .maybeSingle();
-      if (workoutError) {
-        console.log("[Home] Workouts query error", workoutError);
-        throw new Error("Unable to load today\'s workout");
+      const fetchRow = async (fields: string) =>
+        supabase
+          .from("workouts")
+          .select(fields)
+          .eq("user_id", userId)
+          .eq("workout_date", todayIso)
+          .limit(1)
+          .maybeSingle();
+      let workoutRow: any = null;
+      let workoutError: any = null;
+      let workoutResult = await fetchRow("id, label, workout_date, completed, exercises");
+      workoutRow = workoutResult.data;
+      workoutError = workoutResult.error;
+      if (workoutError && workoutError.code === "42703") {
+        console.log("[Home] Workouts query missing columns, retrying with fallback fields");
+        workoutResult = await fetchRow("id, workout_date, exercises");
+        workoutRow = workoutResult.data;
+        workoutError = workoutResult.error;
       }
-      if (workoutRow) {
-        const mapped = mapWorkoutRow(workoutRow);
+      if (workoutError) {
+        if (workoutError.code !== "42703") {
+          console.log("[Home] Workouts query error", workoutError);
+          throw new Error("Unable to load today's workout");
+        }
+        console.log("[Home] Workouts table missing expected columns, composing workout instead");
+      }
+      if (workoutRow && !workoutError) {
+        const mapped = mapWorkoutRow(workoutRow as Record<string, unknown>);
         if (mountedRef.current) {
           setTodayWorkout(mapped);
           setIsRestDay(Boolean(workoutRow.completed));
         }
         return;
       }
-      const { data: composed, error: composeError } = await supabase.functions.invoke("compose_today", {
-        body: { user: userId, dateISO: todayIso },
-      });
-      if (composeError) {
-        console.log("[Home] compose_today error", composeError);
-        throw new Error("Unable to compose today\'s plan");
-      }
-      if (mountedRef.current) {
-        if (composed?.ok && composed.workout) {
-          setTodayWorkout(mapEdgeWorkout(composed.workout));
-          setIsRestDay(false);
-        } else {
-          setTodayWorkout(null);
-          setIsRestDay(true);
-        }
-      }
+      await composeTodayWorkout(todayIso);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to load workout";
       if (mountedRef.current) {
@@ -829,7 +1139,7 @@ function useTodayWorkout(userId: string | null) {
         setLoading(false);
       }
     }
-  }, [userId]);
+  }, [composeTodayWorkout, userId]);
 
   useEffect(() => {
     fetchTodayWorkout();
@@ -839,7 +1149,7 @@ function useTodayWorkout(userId: string | null) {
     await fetchTodayWorkout();
   }, [fetchTodayWorkout]);
 
-  return { todayWorkout, isRestDay, loading, error, refresh };
+  return { todayWorkout, isRestDay, loading, error, refresh, composeTodayWorkout };
 }
 
 function useUserStreak(userId: string | null) {
@@ -870,13 +1180,27 @@ function useUserStreak(userId: string | null) {
       setError(null);
     }
     try {
-      const { data, error: queryError } = await supabase
-        .from("workouts")
-        .select("workout_date, completed")
-        .eq("user_id", userId)
-        .lte("workout_date", getTodayISO())
-        .order("workout_date", { ascending: false })
-        .limit(30);
+      const baseQuery = () =>
+        supabase
+          .from("workouts")
+          .select("workout_date, completed")
+          .eq("user_id", userId)
+          .lte("workout_date", getTodayISO())
+          .order("workout_date", { ascending: false })
+          .limit(30);
+      let { data, error: queryError } = await baseQuery();
+      if (queryError && queryError.code === "42703") {
+        console.log("[Home] Streak query missing 'completed', retrying without it");
+        const fallback = await supabase
+          .from("workouts")
+          .select("workout_date")
+          .eq("user_id", userId)
+          .lte("workout_date", getTodayISO())
+          .order("workout_date", { ascending: false })
+          .limit(30);
+        data = fallback.data?.map((row: any) => ({ ...row, completed: true })) ?? [];
+        queryError = fallback.error;
+      }
       if (queryError) {
         console.log("[Home] Streak query error", queryError);
         throw new Error("Unable to load streak");
@@ -938,21 +1262,45 @@ function useUserGoals(userId: string | null) {
     }
     try {
       const exerciseIds = GOAL_EXERCISES.map((item) => item.id);
-      const { data: tmRows, error: tmError } = await supabase
-        .from("tm_history")
-        .select("exercise_id, training_max, created_at")
-        .eq("user_id", userId)
-        .in("exercise_id", exerciseIds)
-        .order("created_at", { ascending: false });
+      const fetchTmRows = async (withFilter: boolean) => {
+        let query = supabase
+          .from("tm_history")
+          .select("exercise_id, training_max, created_at")
+          .eq("user_id", userId)
+          .order("created_at", { ascending: false });
+        if (withFilter && exerciseIds.length > 0) {
+          query = query.in("exercise_id", exerciseIds);
+        }
+        return query;
+      };
+      let { data: tmRows, error: tmError } = await fetchTmRows(true);
+      if (tmError && tmError.code === "22P02") {
+        console.log("[Home] tm_history query rejected slug ids, retrying without filter");
+        const fallback = await fetchTmRows(false);
+        tmRows = fallback.data;
+        tmError = fallback.error;
+      }
       if (tmError) {
         console.log("[Home] tm_history query error", tmError);
         throw new Error("Unable to load training maxes");
       }
-      const { data: goalRows, error: goalError } = await supabase
-        .from("goals")
-        .select("exercise_id, target_tm, unit")
-        .eq("user_id", userId)
-        .in("exercise_id", exerciseIds);
+      const fetchGoalRows = async (withFilter: boolean) => {
+        let query = supabase
+          .from("goals")
+          .select("exercise_id, target_tm, unit")
+          .eq("user_id", userId);
+        if (withFilter && exerciseIds.length > 0) {
+          query = query.in("exercise_id", exerciseIds);
+        }
+        return query;
+      };
+      let { data: goalRows, error: goalError } = await fetchGoalRows(true);
+      if (goalError && goalError.code === "22P02") {
+        console.log("[Home] goals query rejected slug ids, retrying without filter");
+        const fallbackGoals = await fetchGoalRows(false);
+        goalRows = fallbackGoals.data;
+        goalError = fallbackGoals.error;
+      }
       if (goalError) {
         console.log("[Home] goals query error", goalError);
         throw new Error("Unable to load goals");
@@ -993,6 +1341,9 @@ function mapWorkoutRow(row: any): HomeWorkout {
         name: typeof exercise?.name === "string" ? exercise.name : "Exercise",
         sets: typeof exercise?.sets === "number" ? exercise.sets : null,
         reps: exercise?.reps ?? null,
+        intensity: exercise?.intensity ?? null,
+        load: exercise?.load ?? null,
+        exercise_id: typeof exercise?.exercise_id === "string" ? exercise.exercise_id : null,
       }))
     : [];
   return {
@@ -1001,24 +1352,68 @@ function mapWorkoutRow(row: any): HomeWorkout {
     workout_date: row.workout_date,
     exercises,
     completed: typeof row.completed === "boolean" ? row.completed : null,
+    notes: typeof row.notes === "string" ? row.notes : null,
   };
 }
 
 function mapEdgeWorkout(edge: any): HomeWorkout {
-  const exercises = Array.isArray(edge.exercises)
-    ? edge.exercises.map((exercise: any, index: number) => ({
-        id: typeof exercise?.id === "string" ? exercise.id : `${edge.id}-edge-${index}`,
-        name: typeof exercise?.name === "string" ? exercise.name : "Exercise",
-        sets: typeof exercise?.sets === "number" ? exercise.sets : null,
-        reps: exercise?.reps ?? null,
-      }))
-    : [];
+  const rawExercises = Array.isArray(edge?.sets)
+    ? edge.sets
+    : Array.isArray(edge?.exercises)
+      ? edge.exercises
+      : [];
+  const exercises = rawExercises.map((exercise: any, index: number) => {
+    const baseExerciseId =
+      typeof exercise?.id === "string"
+        ? exercise.id
+        : typeof exercise?.exercise_id === "string"
+          ? exercise.exercise_id
+          : `${edge?.id ?? "edge"}-${index}`;
+    const instanceSuffix =
+      typeof exercise?.set_no === "number"
+        ? `set-${exercise.set_no}`
+        : typeof exercise?.set === "number"
+          ? `set-${exercise.set}`
+          : `idx-${index}`;
+    const exerciseId = `${baseExerciseId}-${instanceSuffix}`;
+    const exerciseName =
+      typeof exercise?.name === "string"
+        ? exercise.name
+        : typeof exercise?.exercise_name === "string"
+          ? exercise.exercise_name
+          : "Exercise";
+    const repsValue =
+      typeof exercise?.reps === "number" || typeof exercise?.reps === "string"
+        ? exercise.reps
+        : typeof exercise?.prescription === "string"
+          ? exercise.prescription
+          : typeof exercise?.target_reps === "number"
+            ? exercise.target_reps
+            : null;
+    return {
+      id: exerciseId,
+      name: exerciseName,
+      sets: typeof exercise?.sets === "number" ? exercise.sets : null,
+      reps: repsValue,
+      intensity: exercise?.intensity ?? null,
+      load: exercise?.load ?? null,
+      exercise_id: typeof exercise?.exercise_id === "string" ? exercise.exercise_id : baseExerciseId,
+    };
+  });
+  const fallbackDate = typeof edge?.workout_date === "string" ? edge.workout_date : getTodayISO();
+  const workoutId =
+    typeof edge?.workout_id === "string" && edge.workout_id.length > 0
+      ? edge.workout_id
+      : typeof edge?.id === "string" && edge.id.length > 0
+        ? edge.id
+        : `compose-${fallbackDate}`;
   return {
-    id: edge.id,
-    label: edge.label ?? "Workout",
-    workout_date: edge.workout_date,
+    id: workoutId,
+    label: edge?.type ?? edge?.label ?? "Workout",
+    workout_date: fallbackDate,
     exercises,
     completed: null,
+    notes: typeof edge?.notes === "string" ? edge.notes : null,
   };
 }
 
@@ -1030,28 +1425,35 @@ function getTodayISO() {
   return `${year}-${month}-${day}`;
 }
 
-async function hasCalendarWorkoutsScheduled(userId: string, startISO: string, days: number) {
-  try {
-    const startDate = new Date(startISO);
-    const endDate = new Date(startDate);
-    endDate.setDate(startDate.getDate() + Math.max(days - 1, 0));
-    const endISO = getISOFromDate(endDate);
-    const { data, error } = await supabase
-      .from("workouts")
-      .select("id")
-      .eq("user_id", userId)
-      .gte("workout_date", startISO)
-      .lte("workout_date", endISO)
-      .limit(1);
-    if (error) {
-      console.log("[Home] hasCalendarWorkoutsScheduled error", error);
-      return false;
+function summarizeWorkoutExercises(workout: HomeWorkout): WorkoutExerciseSummary[] {
+  const summaries = new Map<string, WorkoutExerciseSummary>();
+  workout.exercises.forEach((exercise) => {
+    const exerciseId = exercise.exercise_id ?? exercise.id;
+    const existing =
+      summaries.get(exerciseId) ??
+      {
+        exerciseId,
+        name: exercise.name,
+        totalSets: 0,
+        repsLabel: null,
+        secondaryLabel: null,
+      };
+    existing.name = exercise.name || existing.name;
+    if (typeof exercise.sets === "number") {
+      existing.totalSets = Math.max(existing.totalSets, exercise.sets);
+    } else {
+      existing.totalSets += 1;
     }
-    return Boolean(data && data.length > 0);
-  } catch (error) {
-    console.log("[Home] hasCalendarWorkoutsScheduled exception", error);
-    return false;
-  }
+    if (!existing.repsLabel && exercise.reps != null) {
+      existing.repsLabel =
+        typeof exercise.reps === "number" ? `${exercise.reps} reps` : String(exercise.reps);
+    }
+    summaries.set(exerciseId, existing);
+  });
+  return Array.from(summaries.values()).map((summary) => ({
+    ...summary,
+    totalSets: summary.totalSets === 0 ? 1 : summary.totalSets,
+  }));
 }
 
 function computeStreak(rows: any[]): number {
@@ -1257,39 +1659,173 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
     marginBottom: 18,
   },
-  workoutChipRow: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 10,
-    marginBottom: 24,
+  workoutNotes: {
+    fontSize: 15,
+    color: Colors.textSecondary,
+    marginBottom: 18,
+    lineHeight: 22,
   },
-  workoutChip: {
+  todayBadgeRow: {
     flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    backgroundColor: Colors.background,
-    borderRadius: 18,
-  },
-  workoutChipText: {
-    fontSize: 13,
-    fontWeight: "600" as const,
-    color: Colors.text,
-  },
-  startWorkoutButton: {
-    flexDirection: "row",
-    alignItems: "center",
     justifyContent: "space-between",
-    backgroundColor: Colors.primary,
-    paddingVertical: 16,
-    paddingHorizontal: 20,
-    borderRadius: 20,
+    alignItems: "center",
+    marginBottom: 14,
   },
-  startWorkoutButtonText: {
+  todayBadgeIcon: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    backgroundColor: "rgba(255,255,255,0.08)",
+  },
+  todayBadgeText: {
+    fontSize: 13,
+    color: Colors.text,
+    fontWeight: "600" as const,
+  },
+  outcomeSection: {
+    marginTop: 12,
+    marginBottom: 16,
+  },
+  outcomeSectionTitle: {
     fontSize: 16,
     fontWeight: "700" as const,
+    color: Colors.text,
+    marginBottom: 12,
+  },
+  exerciseCard: {
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+    borderRadius: 20,
+    padding: 16,
+    marginBottom: 12,
+    backgroundColor: Colors.cardBackground,
+  },
+  exerciseCardHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 12,
+  },
+  exerciseIconWrap: {
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 12,
+  },
+  exerciseTextGroup: {
+    flex: 1,
+  },
+  outcomeExercise: {
+    fontSize: 16,
+    fontWeight: "700" as const,
+    color: Colors.text,
+  },
+  outcomeSubtitle: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+  },
+  outcomeToggleRow: {
+    flexDirection: "row",
+    gap: 8,
+    marginBottom: 12,
+  },
+  outcomeToggleButton: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.18)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  outcomeToggleButtonActive: {
+    backgroundColor: "rgba(255,255,255,0.12)",
+    borderColor: Colors.primary,
+  },
+  outcomeToggleText: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+    fontWeight: "600" as const,
+  },
+  outcomeToggleTextActive: {
+    color: Colors.text,
+  },
+  repPickerWrapper: {
+    position: "relative",
+  },
+  repPickerButton: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.2)",
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  repPickerButtonText: {
+    color: Colors.text,
+    fontSize: 13,
+    fontWeight: "600" as const,
+  },
+  repPickerDropdown: {
+    marginTop: 8,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+    backgroundColor: Colors.background,
+  },
+  repPickerOption: {
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(255,255,255,0.08)",
+  },
+  repPickerOptionText: {
+    color: Colors.textSecondary,
+    fontSize: 13,
+  },
+  repPickerOptionTextActive: {
+    color: Colors.text,
+    fontWeight: "700" as const,
+  },
+  finishHelperText: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+    marginTop: 14,
+    marginBottom: 10,
+  },
+  progressPill: {
+    alignSelf: "flex-start",
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 14,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    marginBottom: 10,
+  },
+  progressPillText: {
+    color: Colors.text,
+    fontSize: 13,
+    fontWeight: "600" as const,
+  },
+  finishWorkoutButton: {
+    backgroundColor: Colors.primary,
+    paddingVertical: 16,
+    borderRadius: 20,
+    alignItems: "center",
+  },
+  finishWorkoutButtonDisabled: {
+    opacity: 0.6,
+  },
+  finishWorkoutButtonText: {
+    fontSize: 16,
     color: Colors.background,
+    fontWeight: "700" as const,
   },
   restBadge: {
     width: 56,
