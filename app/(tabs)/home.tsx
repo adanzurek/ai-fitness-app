@@ -48,6 +48,7 @@ type HomeWorkout = {
 };
 
 type HomeWorkoutSet = {
+  id: string;
   set_id: string;
   set_no: number | null;
   exercise_id: string | null;
@@ -97,6 +98,15 @@ type ExerciseState = {
   result_type: ExerciseResultType;
   reps_missed_total?: number;
   weight_delta?: number;
+};
+
+type SetResultRecord = {
+  set_id: string;
+  achieved_reps: number;
+  achieved_load: number | null;
+  rpe: number | null;
+  completed: boolean;
+  notes: string | null;
 };
 
 type ExerciseGroup = {
@@ -267,16 +277,7 @@ function HomeScreenContent() {
       return;
     }
     const defaults = exerciseGroups.reduce<Record<string, ExerciseState>>((acc, group) => {
-      acc[group.exercise_id] = {
-        exercise_id: group.exercise_id,
-        exercise_name: group.exercise_name,
-        num_sets: group.num_sets,
-        target_reps: group.target_reps,
-        target_load: group.target_load,
-        result_type: "unlogged",
-        reps_missed_total: 0,
-        weight_delta: 0,
-      };
+      acc[group.exercise_id] = createDefaultExerciseStateFromGroup(group);
       return acc;
     }, {});
     setExerciseStates(defaults);
@@ -384,24 +385,17 @@ function HomeScreenContent() {
     }
     try {
       setFinishingWorkout(true);
-      const setsPayload = todayWorkout.sets.map((set) => {
-        const state =
-          exerciseStates[set.exercise_id ?? `exercise-${set.set_id}`] ??
-          createDefaultExerciseStateFromSet(set);
-        return buildSetResultPayload(set, state);
-      });
-      const payload = {
-        workout_id: todayWorkout.id,
-        sets: setsPayload,
-      };
+      const payload = buildFinishWorkoutPayload(todayWorkout, exerciseGroups, exerciseStates);
+      console.log("[Home] finish_workout payload", JSON.stringify(payload, null, 2));
       const { data, error } = await supabase.functions.invoke("finish_workout", { body: payload });
       if (error) {
-        console.log("[Home] finish_workout error", error);
+        console.error("[Home] finish_workout error", error);
         throw error;
       }
       if (!data || data.ok !== true) {
         throw new Error("finish_workout returned unexpected response");
       }
+      console.log("[Home] finish_workout success", data);
       setWorkoutCompleted(true);
       Alert.alert("Workout saved", "Nice work — workout saved.");
     } catch (err) {
@@ -410,7 +404,7 @@ function HomeScreenContent() {
     } finally {
       setFinishingWorkout(false);
     }
-  }, [exerciseStates, hasAnyLoggedExercise, todayWorkout]);
+  }, [exerciseGroups, exerciseStates, hasAnyLoggedExercise, todayWorkout]);
 
   if (userLoading) {
     return (
@@ -1387,6 +1381,11 @@ function useUserGoals(userId: string | null) {
         return query;
       };
       let { data: goalRows, error: goalError } = await fetchGoalRows(true);
+      if (goalError && goalError.code === "PGRST205") {
+        console.log("[Home] goals table missing, skipping goal load");
+        goalRows = [];
+        goalError = null;
+      }
       if (goalError && goalError.code === "22P02") {
         console.log("[Home] goals query rejected slug ids, retrying without filter");
         const fallbackGoals = await fetchGoalRows(false);
@@ -1436,10 +1435,12 @@ function mapEdgeWorkout(edge: any): HomeWorkout {
         : `compose-${fallbackDate}`;
   const sets: HomeWorkoutSet[] = Array.isArray(edge?.sets)
     ? edge.sets.map((set: any, index: number) => {
-        const setId =
-          typeof set?.set_id === "string" && set.set_id.length > 0
-            ? set.set_id
-            : `${workoutId}-set-${index}`;
+        const dbSetId =
+          typeof set?.id === "string" && set.id.length > 0
+            ? set.id
+            : typeof set?.set_id === "string" && set.set_id.length > 0
+              ? set.set_id
+              : `${workoutId}-set-${index}`;
         const exerciseName =
           typeof set?.exercise_name === "string"
             ? set.exercise_name
@@ -1459,7 +1460,8 @@ function mapEdgeWorkout(edge: any): HomeWorkout {
               ? set.load
               : null;
         return {
-          set_id: setId,
+          id: dbSetId,
+          set_id: typeof set?.set_id === "string" ? set.set_id : dbSetId,
           set_no:
             typeof set?.set_no === "number"
               ? set.set_no
@@ -1482,19 +1484,6 @@ function mapEdgeWorkout(edge: any): HomeWorkout {
     workout_date: fallbackDate,
     notes: typeof edge?.notes === "string" ? edge.notes : null,
     sets,
-  };
-}
-
-function createDefaultExerciseStateFromSet(set: HomeWorkoutSet): ExerciseState {
-  return {
-    exercise_id: set.exercise_id ?? `exercise-${set.set_id}`,
-    exercise_name: set.exercise_name,
-    num_sets: 1,
-    target_reps: typeof set.reps === "number" ? set.reps : 0,
-    target_load: typeof set.target_load === "number" ? set.target_load : null,
-    result_type: "unlogged",
-    reps_missed_total: 0,
-    weight_delta: 0,
   };
 }
 
@@ -1526,15 +1515,48 @@ function groupWorkoutSets(sets: HomeWorkoutSet[]): ExerciseGroup[] {
   return Array.from(groups.values());
 }
 
-function buildSetResultPayload(set: HomeWorkoutSet, state: ExerciseState) {
+function createDefaultExerciseStateFromGroup(group: ExerciseGroup): ExerciseState {
+  return {
+    exercise_id: group.exercise_id,
+    exercise_name: group.exercise_name,
+    num_sets: group.num_sets,
+    target_reps: group.target_reps,
+    target_load: group.target_load,
+    result_type: "unlogged",
+    reps_missed_total: 0,
+    weight_delta: 0,
+  };
+}
+
+function buildFinishWorkoutPayload(
+  workout: HomeWorkout,
+  groups: ExerciseGroup[],
+  states: Record<string, ExerciseState>,
+) {
+  const set_results = groups.flatMap((group) => {
+    const state = states[group.exercise_id] ?? createDefaultExerciseStateFromGroup(group);
+    return group.sets.map((set) => buildSetResultPayload(set, state));
+  });
+  return {
+    workout_id: workout.id,
+    workout_notes: workout.notes ?? null,
+    set_results,
+  };
+}
+
+function buildSetResultPayload(set: HomeWorkoutSet, state: ExerciseState): SetResultRecord {
+  const setId = set.id ?? set.set_id;
   const reps = typeof set.reps === "number" ? set.reps : 0;
   const baseLoad = state.target_load;
   switch (state.result_type) {
     case "completed":
       return {
-        set_id: set.set_id,
-        performed_reps: reps,
-        performed_load: baseLoad,
+        set_id: setId,
+        achieved_reps: reps,
+        achieved_load: baseLoad,
+        rpe: null,
+        completed: true,
+        notes: null,
       };
     case "missed": {
       const totalMissed = state.reps_missed_total ?? 0;
@@ -1542,32 +1564,44 @@ function buildSetResultPayload(set: HomeWorkoutSet, state: ExerciseState) {
       const perSetMiss = Math.floor(totalMissed / divisor);
       const performedReps = Math.max(reps - perSetMiss, 0);
       return {
-        set_id: set.set_id,
-        performed_reps: performedReps,
-        performed_load: baseLoad,
+        set_id: setId,
+        achieved_reps: performedReps,
+        achieved_load: baseLoad,
+        rpe: null,
+        completed: false,
+        notes: null,
       };
     }
     case "adjusted_weight": {
       const delta = state.weight_delta ?? 0;
       const performedLoad = baseLoad == null ? null : baseLoad + delta;
       return {
-        set_id: set.set_id,
-        performed_reps: reps,
-        performed_load: performedLoad,
+        set_id: setId,
+        achieved_reps: reps,
+        achieved_load: performedLoad,
+        rpe: null,
+        completed: true,
+        notes: null,
       };
     }
     case "skipped":
       return {
-        set_id: set.set_id,
-        performed_reps: 0,
-        performed_load: baseLoad,
+        set_id: setId,
+        achieved_reps: 0,
+        achieved_load: baseLoad,
+        rpe: null,
+        completed: false,
+        notes: null,
       };
     case "unlogged":
     default:
       return {
-        set_id: set.set_id,
-        performed_reps: 0,
-        performed_load: baseLoad,
+        set_id: setId,
+        achieved_reps: 0,
+        achieved_load: baseLoad,
+        rpe: null,
+        completed: false,
+        notes: null,
       };
   }
 }
