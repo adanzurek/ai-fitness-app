@@ -1,14 +1,100 @@
-import { StyleSheet, Text, View, ScrollView, Platform } from "react-native";
+import { StyleSheet, Text, View, ScrollView, Platform, ActivityIndicator } from "react-native";
 import { useFitness } from "@/contexts/FitnessContext";
 import { TrendingUp, Award, Target } from "lucide-react-native";
 import Colors from "@/constants/colors";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import ProgressCards from "@/components/ProgressCards";
+import { useEffect, useState } from "react";
+import { supabase, isSupabaseConfigured } from "@/lib/supabase";
+
+type ProgressSummaryResponse = {
+  ok: boolean;
+  streak: {
+    current: number;
+  };
+  strength_goals: any[];
+  month: {
+    workouts: number;
+    hours: number;
+    consistency_pct: number;
+    prs: number;
+  };
+  supabase_progress: {
+    has_session_data: boolean;
+    training_streak_days: number;
+  };
+  tm_progress: {
+    has_data: boolean;
+    series: {
+      exercise_id: string;
+      week_start: string;
+      training_max: number;
+    }[];
+  };
+};
 
 export default function ProgressScreen() {
   const { userProfile } = useFitness();
   const insets = useSafeAreaInsets();
+  const [progress, setProgress] = useState<ProgressSummaryResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const fetchProgress = async () => {
+      if (!isSupabaseConfigured) {
+        setError("Supabase not configured.");
+        setLoading(false);
+        return;
+      }
+
+      setLoading(true);
+      setError(null);
+
+      const { data, error: fnError } = await supabase.functions.invoke<ProgressSummaryResponse>(
+        "progress_summary",
+        { body: {} },
+      );
+
+      if (!isMounted) {
+        return;
+      }
+
+      if (fnError) {
+        console.error("progress_summary error", fnError);
+        setError("Failed to load progress");
+        setProgress(null);
+      } else if (data?.ok) {
+        setProgress(data);
+      } else {
+        setError("Unexpected response from server");
+        setProgress(null);
+      }
+
+      setLoading(false);
+    };
+
+    fetchProgress();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const streakCount = progress?.streak.current ?? 0;
+  const monthStats = progress?.month;
+
+  if (loading) {
+    return (
+      <View style={[styles.loadingContainer, { paddingTop: insets.top + 60 }]}>
+        <ActivityIndicator size="large" color={Colors.primary} />
+        <Text style={styles.loadingText}>Loading progress…</Text>
+      </View>
+    );
+  }
 
   return (
     <ScrollView style={styles.container} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: insets.bottom + 100 }}>
@@ -16,6 +102,12 @@ export default function ProgressScreen() {
         <Text style={styles.title}>Your Progress</Text>
         <Text style={styles.subtitle}>Track your journey to greatness</Text>
       </View>
+
+      {error ? (
+        <View style={styles.errorBanner}>
+          <Text style={styles.errorText}>{error}</Text>
+        </View>
+      ) : null}
 
       <View style={styles.streakCard}>
         <LinearGradient
@@ -27,7 +119,7 @@ export default function ProgressScreen() {
           <View style={styles.streakIcon}>
             <Award size={32} color={Colors.text} />
           </View>
-          <Text style={styles.streakNumber}>{userProfile.streak}</Text>
+          <Text style={styles.streakNumber}>{streakCount}</Text>
           <Text style={styles.streakLabel}>Day Streak</Text>
           <Text style={styles.streakSubtext}>Keep it going!</Text>
         </LinearGradient>
@@ -39,7 +131,8 @@ export default function ProgressScreen() {
           <Text style={styles.sectionTitle}>Strength Goals</Text>
         </View>
 
-        {userProfile.goals.map((goal) => {
+        {/* TODO: Replace seeded goals with progress.tm_progress or live training max data */}
+        {(userProfile?.goals ?? []).map((goal) => {
           const progress = (goal.current / goal.target) * 100;
           const remaining = goal.target - goal.current;
           
@@ -95,19 +188,23 @@ export default function ProgressScreen() {
         <Text style={styles.sectionTitle}>This Month</Text>
         <View style={styles.statsGrid}>
           <View style={styles.statCard}>
-            <Text style={styles.statNumber}>12</Text>
+            <Text style={styles.statNumber}>{monthStats?.workouts ?? 0}</Text>
             <Text style={styles.statLabel}>Workouts</Text>
           </View>
           <View style={styles.statCard}>
-            <Text style={styles.statNumber}>18.5</Text>
+            <Text style={styles.statNumber}>
+              {monthStats ? Number(monthStats.hours.toFixed(1)) : 0}
+            </Text>
             <Text style={styles.statLabel}>Hours</Text>
           </View>
           <View style={styles.statCard}>
-            <Text style={styles.statNumber}>100%</Text>
+            <Text style={styles.statNumber}>
+              {monthStats ? `${Math.round(monthStats.consistency_pct)}%` : "0%"}
+            </Text>
             <Text style={styles.statLabel}>Consistency</Text>
           </View>
           <View style={styles.statCard}>
-            <Text style={styles.statNumber}>+8</Text>
+            <Text style={styles.statNumber}>{monthStats?.prs ?? 0}</Text>
             <Text style={styles.statLabel}>PRs</Text>
           </View>
         </View>
@@ -115,7 +212,11 @@ export default function ProgressScreen() {
 
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Supabase Progress</Text>
-        <ProgressCards />
+        {/* TODO: Use progress.tm_progress.series to render a sparkline or TM history chart */}
+        <ProgressCards
+          trainingStreakDays={progress?.supabase_progress.training_streak_days ?? 0}
+          hasSessionData={progress?.supabase_progress.has_session_data ?? false}
+        />
       </View>
 
     </ScrollView>
@@ -287,5 +388,29 @@ const styles = StyleSheet.create({
   },
   bottomPadding: {
     height: 20,
+  },
+  loadingContainer: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "flex-start",
+    backgroundColor: Colors.background,
+  },
+  loadingText: {
+    marginTop: 12,
+    color: Colors.textSecondary,
+    fontSize: 14,
+  },
+  errorBanner: {
+    marginHorizontal: 20,
+    marginBottom: 12,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: "rgba(255, 99, 71, 0.15)",
+    borderWidth: 1,
+    borderColor: "rgba(255, 99, 71, 0.4)",
+  },
+  errorText: {
+    color: Colors.text,
+    fontSize: 14,
   },
 });

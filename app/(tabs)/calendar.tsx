@@ -16,6 +16,7 @@ import { useMonthlyWorkouts } from "@/hooks/useMonthlyWorkouts";
 import { useSupabaseUser } from "@/hooks/useSupabaseUser";
 import { useRouter } from "expo-router";
 import { supabase, isSupabaseConfigured } from "@/lib/supabase";
+import type { PostgrestSingleResponse } from "@supabase/supabase-js";
 
 type ComposeTodaySet = {
   id: string;
@@ -40,6 +41,49 @@ type ComposeTodayResponse = {
   workout?: ComposeTodayWorkout | null;
   workout_id?: string | null;
 };
+
+type WorkoutDetailsRow = {
+  id?: string;
+  type?: string | null;
+  label?: string | null;
+  notes?: string | null;
+  exercises?: ComposeTodaySet[] | null;
+};
+
+async function fetchWorkoutDetailsForDate(userId: string, dateISO: string): Promise<WorkoutDetailsRow | null> {
+  const selectFields = (fields: string) =>
+    supabase
+      .from("workouts")
+      .select(fields)
+      .eq("user_id", userId)
+      .eq("workout_date", dateISO)
+      .limit(1)
+      .maybeSingle();
+
+  try {
+    let { data, error } = (await selectFields("id, type, label, notes, exercises")) as PostgrestSingleResponse<WorkoutDetailsRow>;
+    if (error && error.code === "42703") {
+      console.log("[Calendar] Workouts query missing columns, retrying without exercises field");
+      const fallback = (await selectFields("id, type, label, notes")) as PostgrestSingleResponse<WorkoutDetailsRow>;
+      data = fallback.data;
+      error = fallback.error;
+      if (error && error.code === "42703") {
+        console.log("[Calendar] Workouts table missing expected columns, skipping stored workout fetch");
+        return null;
+      }
+    }
+    if (error) {
+      if (error.code !== "PGRST116") {
+        console.error("[Calendar] workout fetch error", error);
+      }
+      return null;
+    }
+    return data ?? null;
+  } catch (err) {
+    console.error("[Calendar] Failed to fetch workout details", err);
+    return null;
+  }
+}
 
 function formatLocalISO(date: Date) {
   const year = date.getFullYear();
@@ -98,7 +142,7 @@ export default function CalendarScreen() {
         setIsComposing(true);
         console.log("[Calendar] compose_today invoked", { dateISO, user: user.id });
         const { data, error: fnError } = await supabase.functions.invoke<ComposeTodayResponse>("compose_today", {
-          body: { user: user.id, dateISO },
+          body: { user_id: user.id, date: dateISO },
         });
         console.log("[Calendar] compose_today response", data);
         if (fnError) {
@@ -118,15 +162,30 @@ export default function CalendarScreen() {
           });
           return;
         }
-        const workoutDate = data.workout?.workout_date ?? dateISO;
-        const workoutId = data.workout_id ?? data.workout?.id ?? "";
-        const workoutType = data.workout?.type ?? data.workout?.label ?? "Session";
-        const workoutNotes = data.workout?.notes ?? "";
-        const workoutSets = JSON.stringify(data.workout?.sets ?? []);
+        let workoutId = data.workout_id ?? data.workout?.id ?? "";
+        let workoutType = data.workout?.type ?? data.workout?.label ?? "Session";
+        let workoutNotes = data.workout?.notes ?? "";
+        let workoutSets = JSON.stringify(data.workout?.sets ?? []);
+
+        const storedWorkout = await fetchWorkoutDetailsForDate(user.id, dateISO);
+        if (storedWorkout) {
+          if (typeof storedWorkout.id === "string" && storedWorkout.id.length > 0) {
+            workoutId = storedWorkout.id;
+          }
+          if (storedWorkout.type || storedWorkout.label) {
+            workoutType = storedWorkout.type ?? storedWorkout.label ?? workoutType;
+          }
+          if (typeof storedWorkout.notes === "string") {
+            workoutNotes = storedWorkout.notes;
+          }
+          if (Array.isArray(storedWorkout.exercises) && storedWorkout.exercises.length > 0) {
+            workoutSets = JSON.stringify(storedWorkout.exercises);
+          }
+        }
         router.push({
           pathname: "/day-view",
           params: {
-            date: workoutDate,
+            date: dateISO,
             workoutId,
             type: workoutType,
             notes: workoutNotes,

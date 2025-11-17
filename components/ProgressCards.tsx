@@ -1,124 +1,16 @@
-import { StyleSheet, Text, View, ActivityIndicator } from 'react-native';
-import { useEffect, useState } from 'react';
-import { supabase, isSupabaseConfigured } from '@/lib/supabase';
-import { useSupabaseUser } from '@/hooks/useSupabaseUser';
-import Colors from '@/constants/colors';
-import { TrendingUp, Flame } from 'lucide-react-native';
+import { StyleSheet, Text, View } from "react-native";
+import Colors from "@/constants/colors";
+import { TrendingUp, Flame } from "lucide-react-native";
 
-interface SessionData {
-  lift: string;
-  weight: number[];
-  reps: number[];
-  started_at: string;
-}
+type ProgressCardsProps = {
+  trainingStreakDays?: number;
+  hasSessionData?: boolean;
+};
 
-interface OneRMData {
-  date: string;
-  lift: string;
-  estimated1RM: number;
-}
-
-function calculateEpley1RM(weight: number, reps: number): number {
-  if (reps === 1) return weight;
-  return weight * (1 + reps / 30);
-}
-
-export default function ProgressCards() {
-  const { user } = useSupabaseUser();
-  const [loading, setLoading] = useState(true);
-  const [oneRMData, setOneRMData] = useState<OneRMData[]>([]);
-  const [streak, setStreak] = useState(0);
-
-  useEffect(() => {
-    if (!user || !isSupabaseConfigured) {
-      setOneRMData([]);
-      setStreak(0);
-      setLoading(false);
-      return;
-    }
-
-    const fetchProgress = async () => {
-      setLoading(true);
-      try {
-        const ninetyDaysAgo = new Date();
-        ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
-
-        const { data: sessions, error } = await supabase
-          .from('sessions')
-          .select('lift, weight, reps, started_at')
-          .eq('user_id', user.id)
-          .gte('started_at', ninetyDaysAgo.toISOString())
-          .order('started_at', { ascending: true });
-
-        if (error) throw error;
-
-        const oneRMByDay: Record<string, number> = {};
-
-        (sessions as SessionData[]).forEach((session) => {
-          const date = session.started_at.split('T')[0];
-          session.weight.forEach((weight, idx) => {
-            const reps = session.reps[idx];
-            if (weight && reps) {
-              const oneRM = calculateEpley1RM(weight, reps);
-              const key = `${date}-${session.lift}`;
-              if (!oneRMByDay[key] || oneRMByDay[key] < oneRM) {
-                oneRMByDay[key] = oneRM;
-              }
-            }
-          });
-        });
-
-        const oneRMArray: OneRMData[] = Object.entries(oneRMByDay).map(([key, value]) => {
-          const parts = key.split('-');
-          const lift = parts.slice(1).join('-');
-          const date = parts[0];
-          return { date, lift, estimated1RM: value };
-        });
-
-        setOneRMData(oneRMArray);
-
-        const uniqueDates = new Set(
-          (sessions as SessionData[]).map((s) => s.started_at.split('T')[0])
-        );
-        const sortedDates = Array.from(uniqueDates).sort();
-
-        let currentStreak = 0;
-        const today = new Date().toISOString().split('T')[0];
-        let checkDate = new Date(today);
-
-        while (true) {
-          const checkStr = checkDate.toISOString().split('T')[0];
-          if (sortedDates.includes(checkStr)) {
-            currentStreak++;
-            checkDate.setDate(checkDate.getDate() - 1);
-          } else {
-            break;
-          }
-        }
-
-        setStreak(currentStreak);
-      } catch (error) {
-        console.error('Failed to fetch progress:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchProgress();
-  }, [user]);
-
-  if (loading) {
-    return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color={Colors.primary} />
-      </View>
-    );
-  }
-
-  const lifts = Array.from(new Set(oneRMData.map((d) => d.lift)));
-  const firstLift = lifts[0];
-  const firstLiftData = oneRMData.filter((d) => d.lift === firstLift);
-
+export default function ProgressCards({
+  trainingStreakDays = 0,
+  hasSessionData = false,
+}: ProgressCardsProps) {
   return (
     <View style={styles.container}>
       <View style={styles.card}>
@@ -126,21 +18,17 @@ export default function ProgressCards() {
           <TrendingUp size={24} color={Colors.primary} />
           <Text style={styles.cardTitle}>1RM Progress</Text>
         </View>
-        {firstLiftData.length > 0 ? (
-          <View>
-            <Text style={styles.liftName}>{firstLift}</Text>
-            <View style={styles.chartPlaceholder}>
-              <Text style={styles.chartText}>
-                {firstLiftData.length} data points over 90 days
-              </Text>
-              <Text style={styles.chartSubtext}>
-                Latest: {Math.round(firstLiftData[firstLiftData.length - 1].estimated1RM)} lbs
-              </Text>
-            </View>
+        {hasSessionData ? (
+          <View style={styles.chartPlaceholder}>
+            <Text style={styles.chartText}>
+              Training data detected. Detailed charts coming soon.
+            </Text>
+            <Text style={styles.chartSubtext}>Keep logging sessions to build history.</Text>
           </View>
         ) : (
           <Text style={styles.emptyText}>No session data yet. Start training to see progress!</Text>
         )}
+        {/* TODO: Use progress.tm_progress.series to render a sparkline or history chart once ready */}
       </View>
 
       <View style={styles.card}>
@@ -149,9 +37,9 @@ export default function ProgressCards() {
           <Text style={styles.cardTitle}>Training Streak</Text>
         </View>
         <View style={styles.streakContent}>
-          <Text style={styles.streakNumber}>{streak}</Text>
+          <Text style={styles.streakNumber}>{trainingStreakDays}</Text>
           <Text style={styles.streakLabel}>
-            {streak === 1 ? 'consecutive day' : 'consecutive days'}
+            {trainingStreakDays === 1 ? "consecutive day" : "consecutive days"}
           </Text>
         </View>
       </View>
@@ -162,10 +50,6 @@ export default function ProgressCards() {
 const styles = StyleSheet.create({
   container: {
     gap: 16,
-  },
-  loadingContainer: {
-    paddingVertical: 60,
-    alignItems: 'center',
   },
   card: {
     backgroundColor: Colors.cardBackground,
@@ -187,12 +71,6 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '700' as const,
     color: Colors.text,
-  },
-  liftName: {
-    fontSize: 16,
-    fontWeight: '600' as const,
-    color: Colors.textSecondary,
-    marginBottom: 12,
   },
   chartPlaceholder: {
     backgroundColor: 'rgba(255, 255, 255, 0.05)',

@@ -1,19 +1,8 @@
 import { Stack, useLocalSearchParams } from "expo-router";
-import {
-  ActivityIndicator,
-  Alert,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from "react-native";
-import { useEffect, useMemo, useState } from "react";
+import { ScrollView, StyleSheet, Text, View } from "react-native";
+import { useMemo } from "react";
 import Colors from "@/constants/colors";
-import { useSupabaseUser } from "@/hooks/useSupabaseUser";
-import { supabase, isSupabaseConfigured } from "@/lib/supabase";
-import { useMutation } from "@tanstack/react-query";
-import { CheckCircle2, Circle } from "lucide-react-native";
+import { Dumbbell } from "lucide-react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 const CARD_HORIZONTAL_PADDING = 20;
@@ -21,16 +10,11 @@ const CARD_HORIZONTAL_PADDING = 20;
 type WorkoutSet = {
   id: string;
   name: string;
+  exerciseKey: string;
   sets?: number | null;
-  reps?: number | null;
+  reps?: number | string | null;
   rir?: number | null;
-  weight?: number | null;
-};
-
-type LogCompletionInput = {
-  exerciseId: string;
-  completed: boolean;
-  previous: boolean;
+  weight?: number | string | null;
 };
 
 function parseLocalISODate(dateISO: string) {
@@ -67,6 +51,71 @@ function getParamValue(param?: string | string[]): string {
   return "";
 }
 
+function resolveName(candidate: Record<string, unknown>): string | null {
+  if (typeof candidate.name === "string") {
+    return candidate.name;
+  }
+  if (typeof candidate.exercise_name === "string") {
+    return candidate.exercise_name;
+  }
+  if (typeof candidate.label === "string") {
+    return candidate.label;
+  }
+  return null;
+}
+
+function coerceReps(candidate: Record<string, unknown>): number | string | null {
+  const source =
+    candidate.reps ??
+    candidate.target_reps ??
+    candidate.prescription ??
+    candidate.target_repetitions ??
+    null;
+  if (typeof source === "number" || typeof source === "string") {
+    return source;
+  }
+  return null;
+}
+
+function coerceRir(candidate: Record<string, unknown>): number | null {
+  const source = candidate.rir ?? candidate.target_rir ?? null;
+  return typeof source === "number" ? source : null;
+}
+
+function coerceWeight(candidate: Record<string, unknown>): number | string | null {
+  const source = candidate.weight ?? candidate.target_weight ?? candidate.load ?? null;
+  if (typeof source === "number" || typeof source === "string") {
+    return source;
+  }
+  return null;
+}
+
+function normalizeSet(candidate: Record<string, unknown>, index: number): WorkoutSet | null {
+  const name = resolveName(candidate);
+  if (!name) {
+    return null;
+  }
+  const baseId =
+    (typeof candidate.id === "string" && candidate.id.length > 0
+      ? candidate.id
+      : typeof candidate.exercise_id === "string" && candidate.exercise_id.length > 0
+        ? candidate.exercise_id
+        : null) ?? `${name.replace(/\s+/g, "-").toLowerCase()}`;
+  const exerciseKey =
+    (typeof candidate.exercise_id === "string" && candidate.exercise_id.length > 0 ? candidate.exercise_id : null) ??
+    baseId;
+  const sets = typeof candidate.sets === "number" ? candidate.sets : null;
+  return {
+    id: `${baseId}-${index}`,
+    name,
+    exerciseKey,
+    sets,
+    reps: coerceReps(candidate),
+    rir: coerceRir(candidate),
+    weight: coerceWeight(candidate),
+  };
+}
+
 function parseSets(rawSets: string): WorkoutSet[] {
   if (!rawSets) {
     return [];
@@ -74,13 +123,16 @@ function parseSets(rawSets: string): WorkoutSet[] {
   try {
     const parsed = JSON.parse(rawSets) as unknown;
     if (Array.isArray(parsed)) {
-      return parsed.filter((item): item is WorkoutSet => {
+      return parsed.reduce<WorkoutSet[]>((acc, item, index) => {
         if (!item || typeof item !== "object") {
-          return false;
+          return acc;
         }
-        const candidate = item as Partial<WorkoutSet>;
-        return typeof candidate.id === "string" && typeof candidate.name === "string";
-      });
+        const normalized = normalizeSet(item as Record<string, unknown>, index);
+        if (normalized) {
+          acc.push(normalized);
+        }
+        return acc;
+      }, []);
     }
   } catch (error) {
     console.error("[DayView] Failed to parse sets", error);
@@ -88,9 +140,56 @@ function parseSets(rawSets: string): WorkoutSet[] {
   return [];
 }
 
+type GroupedExercise = {
+  key: string;
+  name: string;
+  totalSets: number;
+  repsLabel: string | null;
+  weightLabel: string | null;
+};
+
+function groupExercises(sets: WorkoutSet[]): GroupedExercise[] {
+  const summaries = new Map<string, GroupedExercise>();
+  sets.forEach((set) => {
+    const key = set.exerciseKey ?? set.id;
+    const existing =
+      summaries.get(key) ??
+      {
+        key,
+        name: set.name,
+        totalSets: 0,
+        repsLabel: null,
+        weightLabel: null,
+      };
+    existing.name = set.name || existing.name;
+    if (typeof set.sets === "number" && set.sets > 0) {
+      existing.totalSets = Math.max(existing.totalSets, set.sets);
+    } else {
+      existing.totalSets += 1;
+    }
+    if (!existing.repsLabel && set.reps != null) {
+      existing.repsLabel = typeof set.reps === "number" ? `${set.reps} reps` : String(set.reps);
+    }
+    if (!existing.weightLabel && set.weight != null) {
+      existing.weightLabel = typeof set.weight === "number" ? `${set.weight} lbs` : String(set.weight);
+    }
+    summaries.set(key, existing);
+  });
+  return Array.from(summaries.values());
+}
+
+function formatExerciseMeta(exercise: GroupedExercise) {
+  return [
+    exercise.totalSets > 0 ? `${exercise.totalSets} set${exercise.totalSets === 1 ? "" : "s"}` : null,
+    exercise.repsLabel,
+    exercise.weightLabel,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 export default function DayViewScreen() {
   const params = useLocalSearchParams();
-  const { user } = useSupabaseUser();
   const insets = useSafeAreaInsets();
 
   const dateISO = useMemo(() => getParamValue(params.date), [params.date]);
@@ -101,84 +200,12 @@ export default function DayViewScreen() {
   const workoutNotes = useMemo(() => getParamValue(params.notes), [params.notes]);
   const rawSets = useMemo(() => getParamValue(params.sets), [params.sets]);
   const parsedSets = useMemo(() => parseSets(rawSets), [rawSets]);
+  const groupedExercises = useMemo(() => groupExercises(parsedSets), [parsedSets]);
 
   const isRestDay = isRestParam === "true";
-  const hasWorkout = !isRestDay && workoutId.length > 0;
-  const isPreviewWorkout = hasWorkout && workoutId.startsWith("compose-");
-  const canLogCompletion = hasWorkout && !isPreviewWorkout;
-  const hasExercises = parsedSets.length > 0;
+  const hasExercises = groupedExercises.length > 0;
   const headerTitle = isRestDay ? "Rest Day" : workoutType || "Day View";
   const friendlyDate = useMemo(() => (dateISO ? formatFriendlyDate(dateISO) : "Unknown date"), [dateISO]);
-
-  const [completionStates, setCompletionStates] = useState<Record<string, boolean>>({});
-
-  useEffect(() => {
-    if (hasExercises) {
-      const initialState = parsedSets.reduce<Record<string, boolean>>((acc, exercise) => {
-        acc[exercise.id] = false;
-        return acc;
-      }, {});
-      setCompletionStates(initialState);
-      return;
-    }
-    setCompletionStates({});
-  }, [hasExercises, parsedSets]);
-
-  const logCompletionMutation = useMutation({
-    mutationFn: async ({ exerciseId, completed }: LogCompletionInput) => {
-      if (!isSupabaseConfigured) {
-        throw new Error("Supabase not configured");
-      }
-      if (!user?.id) {
-        throw new Error("User required");
-      }
-      if (!canLogCompletion) {
-        throw new Error("Workout not available");
-      }
-      console.log("[DayView] log_workout_completion invoked", {
-        exerciseId,
-        completed,
-        date: dateISO,
-        workoutId,
-      });
-      const { error } = await supabase.functions.invoke("log_workout_completion", {
-        body: {
-          user_id: user.id,
-          workout_id: workoutId,
-          exercise_id: exerciseId,
-          completed,
-          date: dateISO,
-        },
-      });
-      if (error) {
-        console.error("[DayView] log_workout_completion error", error);
-        throw error;
-      }
-      return { exerciseId, completed };
-    },
-    onError: (error, variables) => {
-      console.error("[DayView] Unable to update exercise", error);
-      setCompletionStates((prev) => ({ ...prev, [variables.exerciseId]: variables.previous }));
-      Alert.alert("Update failed", "We couldn\'t save this exercise. Please try again.");
-    },
-  });
-
-  const handleToggleExercise = (exerciseId: string) => {
-    if (!canLogCompletion) {
-      const title = isPreviewWorkout ? "Preview workout" : "Workout unavailable";
-      const message = isPreviewWorkout
-        ? "This workout hasn't been scheduled in your calendar yet, so logging sets isn't available."
-        : "We couldn't find this workout. Try another date.";
-      Alert.alert(title, message);
-      return;
-    }
-    setCompletionStates((prev) => {
-      const previous = prev[exerciseId] ?? false;
-      const next = { ...prev, [exerciseId]: !previous };
-      logCompletionMutation.mutate({ exerciseId, completed: !previous, previous });
-      return next;
-    });
-  };
 
   return (
     <View style={styles.container} testID="day-view-screen">
@@ -220,49 +247,27 @@ export default function DayViewScreen() {
           <View style={styles.exercisesSection}>
             <Text style={styles.sectionTitle}>Workout Breakdown</Text>
             <View style={styles.exercisesCard}>
-              {parsedSets.map((exercise) => {
-                const completed = completionStates[exercise.id] ?? false;
-                return (
-                  <TouchableOpacity
-                    key={exercise.id}
-                    style={[styles.exerciseRow, completed && styles.exerciseRowCompleted]}
-                    onPress={() => handleToggleExercise(exercise.id)}
-                    activeOpacity={0.85}
-                    testID={`exercise-toggle-${exercise.id}`}
-                    disabled={logCompletionMutation.isPending}
-                  >
-                    <View style={styles.exerciseLeft}>
-                      <View style={styles.iconWrapper}>
-                        {completed ? (
-                          <CheckCircle2 size={24} color={Colors.primary} />
-                        ) : (
-                          <Circle size={24} color={"rgba(255,255,255,0.35)"} />
-                        )}
-                      </View>
-                      <View style={styles.exerciseTextBlock}>
-                        <Text style={styles.exerciseName}>{exercise.name}</Text>
-                        <Text style={styles.exerciseMeta}>
-                          {[
-                            exercise.sets ? `${exercise.sets} sets` : null,
-                            exercise.reps ? `${exercise.reps} reps` : null,
-                            exercise.rir ? `RIR ${exercise.rir}` : null,
-                            exercise.weight ? `${exercise.weight} lbs` : null,
-                          ]
-                            .filter(Boolean)
-                            .join(" · ") || "Custom work"}
-                        </Text>
-                      </View>
+              {groupedExercises.map((exercise, index) => (
+                <View
+                  key={exercise.key}
+                  style={[
+                    styles.exerciseRow,
+                    index !== groupedExercises.length - 1 && styles.exerciseRowDivider,
+                  ]}
+                >
+                  <View style={styles.exerciseLeft}>
+                    <View style={styles.iconWrapper}>
+                      <Dumbbell size={20} color={Colors.primary} />
                     </View>
-                    {logCompletionMutation.isPending && logCompletionMutation.variables?.exerciseId === exercise.id ? (
-                      <ActivityIndicator size="small" color={Colors.primary} />
-                    ) : (
-                      <Text style={[styles.exerciseStatus, completed && styles.exerciseStatusCompleted]}>
-                        {completed ? "Completed" : "Tap to complete"}
+                    <View style={styles.exerciseTextBlock}>
+                      <Text style={styles.exerciseName}>{exercise.name}</Text>
+                      <Text style={styles.exerciseMeta}>
+                        {formatExerciseMeta(exercise) || "Custom work"}
                       </Text>
-                    )}
-                  </TouchableOpacity>
-                );
-              })}
+                    </View>
+                  </View>
+                </View>
+              ))}
             </View>
           </View>
         ) : null}
@@ -394,14 +399,14 @@ const styles = StyleSheet.create({
   },
   exerciseRow: {
     flexDirection: "row",
-    justifyContent: "space-between",
     alignItems: "center",
-    paddingVertical: 16,
-    paddingHorizontal: 18,
+    paddingVertical: 18,
+    paddingHorizontal: 20,
     gap: 12,
   },
-  exerciseRowCompleted: {
-    backgroundColor: "rgba(34,197,94,0.08)",
+  exerciseRowDivider: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(255,255,255,0.08)",
   },
   exerciseLeft: {
     flexDirection: "row",
@@ -410,8 +415,12 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   iconWrapper: {
-    width: 32,
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: "rgba(255,255,255,0.05)",
     alignItems: "center",
+    justifyContent: "center",
   },
   exerciseTextBlock: {
     flex: 1,
@@ -425,13 +434,6 @@ const styles = StyleSheet.create({
   exerciseMeta: {
     fontSize: 13,
     color: "rgba(255,255,255,0.6)",
-  },
-  exerciseStatus: {
-    fontSize: 12,
-    color: "rgba(255,255,255,0.5)",
-    fontWeight: "600" as const,
-  },
-  exerciseStatusCompleted: {
-    color: "#22c55e",
+    lineHeight: 18,
   },
 });
