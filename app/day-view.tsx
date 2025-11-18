@@ -1,6 +1,6 @@
-import { Stack, useLocalSearchParams } from "expo-router";
-import { ScrollView, StyleSheet, Text, View } from "react-native";
-import { useMemo } from "react";
+import { Stack, useLocalSearchParams, useRouter } from "expo-router";
+import { TouchableOpacity, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useMemo, useCallback } from "react";
 import Colors from "@/constants/colors";
 import { Dumbbell } from "lucide-react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -190,6 +190,7 @@ function formatExerciseMeta(exercise: GroupedExercise) {
 
 export default function DayViewScreen() {
   const params = useLocalSearchParams();
+  const router = useRouter();
   const insets = useSafeAreaInsets();
 
   const dateISO = useMemo(() => getParamValue(params.date), [params.date]);
@@ -207,6 +208,14 @@ export default function DayViewScreen() {
   const headerTitle = isRestDay ? "Rest Day" : workoutType || "Day View";
   const friendlyDate = useMemo(() => (dateISO ? formatFriendlyDate(dateISO) : "Unknown date"), [dateISO]);
 
+  const handleBack = useCallback(() => {
+    if (router.canGoBack()) {
+      router.back();
+      return;
+    }
+    router.replace("/(tabs)/calendar");
+  }, [router]);
+
   return (
     <View style={styles.container} testID="day-view-screen">
       <Stack.Screen
@@ -214,6 +223,16 @@ export default function DayViewScreen() {
           title: headerTitle,
           headerStyle: { backgroundColor: Colors.background },
           headerTintColor: Colors.text,
+          headerLeft: () => (
+            <TouchableOpacity
+              onPress={handleBack}
+              style={styles.backButton}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              activeOpacity={0.6}
+            >
+              <Text style={styles.backButtonText}>Back</Text>
+            </TouchableOpacity>
+          ),
         }}
       />
       <ScrollView
@@ -435,5 +454,18 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: "rgba(255,255,255,0.6)",
     lineHeight: 18,
+  },
+  backButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.08)",
+  },
+  backButtonText: {
+    color: Colors.text,
+    fontSize: 15,
+    fontWeight: "600" as const,
   },
 });

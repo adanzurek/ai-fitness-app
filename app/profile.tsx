@@ -8,6 +8,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  TouchableOpacity,
   View,
 } from "react-native";
 import { useRouter } from "expo-router";
@@ -52,6 +53,7 @@ export default function ProfileScreen() {
   const [customGoal, setCustomGoal] = useState<string>("");
   const [goalDraft, setGoalDraft] = useState<string>("");
   const [hasInitializedPreferences, setHasInitializedPreferences] = useState<boolean>(false);
+  const [regeneratingPlan, setRegeneratingPlan] = useState(false);
 
   const profileQuery = useQuery<Profile | null>({
     queryKey: ["profile", user?.id ?? null],
@@ -133,6 +135,50 @@ export default function ProfileScreen() {
     }
   }, [profileQuery.data, profileQuery.isFetched, hasInitializedPreferences, applySupabaseProfile, initializeFromContext]);
 
+  const regeneratePlan = useCallback(async () => {
+    if (!user?.id || !isSupabaseConfigured) {
+      return;
+    }
+    const todayISO = new Date().toISOString().slice(0, 10);
+    try {
+      setRegeneratingPlan(true);
+      const { error: planError } = await supabase.functions.invoke("generate_plan_ai", {
+        body: {
+          user_id: user.id,
+          start_date: todayISO,
+        },
+      });
+      if (planError) {
+        console.error("[Profile] generate_plan_ai error", planError);
+        Alert.alert(
+          "Plan update incomplete",
+          "We updated your preferences but couldn’t regenerate the program. Please try again later."
+        );
+        return;
+      }
+      const { error: weekError } = await supabase.functions.invoke("generate_week", {
+        body: {
+          user_id: user.id,
+          start_date: todayISO,
+          days: 7,
+        },
+      });
+      if (weekError) {
+        console.error("[Profile] generate_week error", weekError);
+        Alert.alert(
+          "Week refresh failed",
+          "Program updated, but we couldn’t refresh this week. Use the Home screen to refresh later."
+        );
+      } else {
+        await queryClient.invalidateQueries({ queryKey: ["month_calendar"], exact: false }).catch(() => undefined);
+      }
+    } catch (err) {
+      console.error("[Profile] regeneratePlan unexpected error", err);
+    } finally {
+      setRegeneratingPlan(false);
+    }
+  }, [queryClient, user]);
+
   const preferenceMutation = useMutation<PreferenceMutationResult, unknown, PreferenceState>({
     mutationFn: async (state) => {
       if (!user) {
@@ -196,6 +242,7 @@ export default function ProfileScreen() {
         setGoalDraft("");
       }
       console.log("Profile preferences updated", result.payload ? "profile synced" : "local only");
+      await regeneratePlan();
     },
     onError: (error) => {
       console.error("Profile preferences update failed", error);
@@ -212,6 +259,7 @@ export default function ProfileScreen() {
     console.log("Profile submitting preferences", state);
     preferenceMutation.mutate(state);
   };
+  const preferencesBusy = preferenceMutation.isPending || regeneratingPlan;
 
   const handleSelectLevel = (value: FitnessLevel) => {
     if (selectedLevel === value) {
@@ -370,15 +418,16 @@ export default function ProfileScreen() {
   return (
     <View style={[styles.container, { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 24 }]}>
       <View style={styles.headerRow}>
-        <Pressable
+        <TouchableOpacity
           onPress={handleBack}
+          activeOpacity={0.8}
           accessibilityRole="button"
           accessibilityLabel="Go back"
-          style={({ pressed }) => [styles.iconButton, pressed && styles.iconButtonPressed]}
+          style={styles.backButton}
           testID="profile-back-button"
         >
           <ArrowLeft color={Colors.text} size={20} />
-        </Pressable>
+        </TouchableOpacity>
         <Text style={styles.headerTitle}>Profile</Text>
         <View style={styles.iconButtonPlaceholder} />
       </View>
@@ -432,7 +481,7 @@ export default function ProfileScreen() {
         >
           <View style={styles.preferenceHeaderRow}>
             <Text style={styles.sectionTitle}>Training Preferences</Text>
-            {preferenceMutation.isPending && (
+            {preferencesBusy && (
               <View style={styles.savingBadge} testID="profile-preferences-saving">
                 <ActivityIndicator size="small" color={Colors.text} />
                 <Text style={styles.savingBadgeText}>Saving</Text>
@@ -609,17 +658,17 @@ export default function ProfileScreen() {
                         />
                         <Pressable
                           onPress={handleSaveCustomGoal}
-                          disabled={preferenceMutation.isPending || goalDraft.trim().length === 0}
+                          disabled={preferencesBusy || goalDraft.trim().length === 0}
                           style={({ pressed }) => [
                             styles.saveButton,
-                            (preferenceMutation.isPending || goalDraft.trim().length === 0) && styles.saveButtonDisabled,
-                            pressed && !(preferenceMutation.isPending || goalDraft.trim().length === 0) && styles.saveButtonPressed,
+                            (preferencesBusy || goalDraft.trim().length === 0) && styles.saveButtonDisabled,
+                            pressed && !(preferencesBusy || goalDraft.trim().length === 0) && styles.saveButtonPressed,
                           ]}
                           accessibilityRole="button"
                           accessibilityLabel="Save custom goal"
                           testID="profile-custom-goal-save"
                         >
-                          {preferenceMutation.isPending ? (
+                          {preferencesBusy ? (
                             <ActivityIndicator color={Colors.text} />
                           ) : (
                             <Text style={styles.saveButtonText}>Save goal</Text>
@@ -683,23 +732,19 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     marginBottom: 32,
   },
-  iconButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+  backButton: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
     borderWidth: 1,
     borderColor: Colors.border,
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: Colors.cardBackground,
   },
-  iconButtonPressed: {
-    backgroundColor: Colors.primaryDark,
-    borderColor: Colors.primary,
-  },
   iconButtonPlaceholder: {
-    width: 44,
-    height: 44,
+    width: 46,
+    height: 46,
   },
   headerTitle: {
     fontSize: 20,

@@ -10,13 +10,13 @@ import {
 } from "react-native";
 import Colors from "@/constants/colors";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useFocusEffect } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import MonthlyCalendar from "@/components/MonthlyCalendar";
-import { useMonthlyWorkouts } from "@/hooks/useMonthlyWorkouts";
+import { useMonthlyCalendar } from "@/hooks/useMonthlyWorkouts";
 import { useSupabaseUser } from "@/hooks/useSupabaseUser";
 import { useRouter } from "expo-router";
 import { supabase, isSupabaseConfigured } from "@/lib/supabase";
-import type { PostgrestSingleResponse } from "@supabase/supabase-js";
 
 type ComposeTodaySet = {
   id: string;
@@ -42,49 +42,6 @@ type ComposeTodayResponse = {
   workout_id?: string | null;
 };
 
-type WorkoutDetailsRow = {
-  id?: string;
-  type?: string | null;
-  label?: string | null;
-  notes?: string | null;
-  exercises?: ComposeTodaySet[] | null;
-};
-
-async function fetchWorkoutDetailsForDate(userId: string, dateISO: string): Promise<WorkoutDetailsRow | null> {
-  const selectFields = (fields: string) =>
-    supabase
-      .from("workouts")
-      .select(fields)
-      .eq("user_id", userId)
-      .eq("workout_date", dateISO)
-      .limit(1)
-      .maybeSingle();
-
-  try {
-    let { data, error } = (await selectFields("id, type, label, notes, exercises")) as PostgrestSingleResponse<WorkoutDetailsRow>;
-    if (error && error.code === "42703") {
-      console.log("[Calendar] Workouts query missing columns, retrying without exercises field");
-      const fallback = (await selectFields("id, type, label, notes")) as PostgrestSingleResponse<WorkoutDetailsRow>;
-      data = fallback.data;
-      error = fallback.error;
-      if (error && error.code === "42703") {
-        console.log("[Calendar] Workouts table missing expected columns, skipping stored workout fetch");
-        return null;
-      }
-    }
-    if (error) {
-      if (error.code !== "PGRST116") {
-        console.error("[Calendar] workout fetch error", error);
-      }
-      return null;
-    }
-    return data ?? null;
-  } catch (err) {
-    console.error("[Calendar] Failed to fetch workout details", err);
-    return null;
-  }
-}
-
 function formatLocalISO(date: Date) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -95,7 +52,7 @@ function formatLocalISO(date: Date) {
 export default function CalendarScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { user } = useSupabaseUser();
+  const { user, loading: userLoading } = useSupabaseUser();
   const todayReference = useMemo(() => {
     const now = new Date();
     return new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -110,7 +67,13 @@ export default function CalendarScreen() {
   const currentYear = currentDate.getFullYear();
   const currentMonth = currentDate.getMonth();
 
-  const { days, loading, error } = useMonthlyWorkouts({ year: currentYear, month: currentMonth });
+  const {
+    days,
+    loading: calendarLoading,
+    error,
+    refetch: refetchCalendar,
+  } = useMonthlyCalendar(user?.id ?? null, currentYear, currentMonth);
+  const loading = userLoading || calendarLoading;
 
   useEffect(() => {
     if (
@@ -123,12 +86,31 @@ export default function CalendarScreen() {
     setSelectedDate(formatLocalISO(new Date(currentYear, currentMonth, 1)));
   }, [currentYear, currentMonth, todayReference]);
 
+  useFocusEffect(
+    useCallback(() => {
+      if (user?.id) {
+        refetchCalendar();
+      }
+    }, [refetchCalendar, user?.id]),
+  );
+
   const handleSelectDate = useCallback(
     async (dateISO: string) => {
       if (isComposing) {
         return;
       }
       setSelectedDate(dateISO);
+      const hasPlannedWorkout = days.some((day) => day.date === dateISO && day.workouts.length > 0);
+      if (!hasPlannedWorkout) {
+        router.push({
+          pathname: "/day-view",
+          params: {
+            date: dateISO,
+            isRest: "true",
+          },
+        });
+        return;
+      }
       if (!isSupabaseConfigured) {
         Alert.alert("Supabase not configured", "Configure Supabase to load workouts for selected dates.");
         return;
@@ -162,26 +144,10 @@ export default function CalendarScreen() {
           });
           return;
         }
-        let workoutId = data.workout_id ?? data.workout?.id ?? "";
-        let workoutType = data.workout?.type ?? data.workout?.label ?? "Session";
-        let workoutNotes = data.workout?.notes ?? "";
-        let workoutSets = JSON.stringify(data.workout?.sets ?? []);
-
-        const storedWorkout = await fetchWorkoutDetailsForDate(user.id, dateISO);
-        if (storedWorkout) {
-          if (typeof storedWorkout.id === "string" && storedWorkout.id.length > 0) {
-            workoutId = storedWorkout.id;
-          }
-          if (storedWorkout.type || storedWorkout.label) {
-            workoutType = storedWorkout.type ?? storedWorkout.label ?? workoutType;
-          }
-          if (typeof storedWorkout.notes === "string") {
-            workoutNotes = storedWorkout.notes;
-          }
-          if (Array.isArray(storedWorkout.exercises) && storedWorkout.exercises.length > 0) {
-            workoutSets = JSON.stringify(storedWorkout.exercises);
-          }
-        }
+        const workoutId = data.workout_id ?? data.workout?.id ?? "";
+        const workoutType = data.workout?.type ?? data.workout?.label ?? "Session";
+        const workoutNotes = data.workout?.notes ?? "";
+        const workoutSets = JSON.stringify(data.workout?.sets ?? []);
         router.push({
           pathname: "/day-view",
           params: {
@@ -200,7 +166,7 @@ export default function CalendarScreen() {
         setIsComposing(false);
       }
     },
-    [isComposing, router, user]
+    [days, isComposing, router, user]
   );
 
   const changeMonth = (delta: number) => {
@@ -253,9 +219,8 @@ export default function CalendarScreen() {
 
       {isComposing && (
         <View style={styles.loadingOverlay} pointerEvents="none">
-          <ActivityIndicator size="large" color={Colors.primary}
-            testID="calendar-compose-loading"
-          />
+          <View style={styles.loadingBackdrop} />
+          <ActivityIndicator size="large" color={Colors.primary} testID="calendar-compose-loading" />
         </View>
       )}
     </View>
@@ -326,11 +291,12 @@ const styles = StyleSheet.create({
     color: "#FCA5A5",
   },
   loadingOverlay: {
-    position: "absolute",
-    bottom: 40,
-    left: 0,
-    right: 0,
+    ...StyleSheet.absoluteFillObject,
     alignItems: "center",
     justifyContent: "center",
+  },
+  loadingBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.45)",
   },
 });

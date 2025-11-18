@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -34,6 +34,7 @@ export default function OnboardingScreen() {
   const [customGoal, setCustomGoal] = useState<string>("");
   const [hasPrefilled, setHasPrefilled] = useState<boolean>(false);
   const [hasAlertedProfileError, setHasAlertedProfileError] = useState<boolean>(false);
+  const [isFinalizingPlan, setIsFinalizingPlan] = useState<boolean>(false);
 
   const profileQuery = useQuery<Profile | null>({
     queryKey: ["profile", user?.id ?? null],
@@ -110,6 +111,50 @@ export default function OnboardingScreen() {
     return true;
   }, [selectedGoal, selectedDays, selectedLevel, customGoal]);
 
+  const finalizePlan = useCallback(async () => {
+    if (!user?.id || !isSupabaseConfigured) {
+      return;
+    }
+    const todayISO = new Date().toISOString().slice(0, 10);
+    try {
+      setIsFinalizingPlan(true);
+      const { error: planError } = await supabase.functions.invoke("generate_plan_ai", {
+        body: {
+          user_id: user.id,
+          start_date: todayISO,
+        },
+      });
+      if (planError) {
+        console.error("[Onboarding] generate_plan_ai error", planError);
+        Alert.alert(
+          "Plan setup incomplete",
+          "We couldn’t generate your full program yet, but you can regenerate it from Settings later."
+        );
+        return;
+      }
+      const { error: weekError } = await supabase.functions.invoke("generate_week", {
+        body: {
+          user_id: user.id,
+          start_date: todayISO,
+          days: 7,
+        },
+      });
+      if (weekError) {
+        console.error("[Onboarding] generate_week error", weekError);
+        Alert.alert(
+          "Week generation failed",
+          "Program created, but we couldn’t refresh this week. Refresh the Home screen later to retry."
+        );
+      } else {
+        await queryClient.invalidateQueries({ queryKey: ["month_calendar"], exact: false }).catch(() => undefined);
+      }
+    } catch (error) {
+      console.error("[Onboarding] finalize plan unexpected error", error);
+    } finally {
+      setIsFinalizingPlan(false);
+    }
+  }, [queryClient, user]);
+
   const mutation = useMutation({
     mutationFn: async () => {
       if (!user) {
@@ -157,7 +202,8 @@ export default function OnboardingScreen() {
         primaryGoalCustom: primaryGoalType === 'custom' ? customGoal.trim() || null : null,
       };
       updateUserProfile(nextProfile);
-      console.log('Onboarding upsert success directing to tabs', data ? 'profile returned' : 'no profile returned');
+      console.log('Onboarding upsert success, generating plan...');
+      await finalizePlan();
       router.replace('/(tabs)');
     },
     onError: (error: unknown) => {
@@ -192,6 +238,13 @@ export default function OnboardingScreen() {
     console.log('Onboarding submit pressed');
     mutation.mutate();
   };
+
+  const isSubmitting = mutation.isPending || isFinalizingPlan;
+  const submitLabel = isFinalizingPlan
+    ? "Setting up your program..."
+    : mutation.isPending
+      ? "Saving preferences..."
+      : "Start Training";
 
   return (
     <LinearGradient
@@ -327,19 +380,22 @@ export default function OnboardingScreen() {
         <Pressable
           style={({ pressed }) => [
             styles.submitButton,
-            (!canSubmit || mutation.isPending) && styles.submitButtonDisabled,
+            (!canSubmit || isSubmitting) && styles.submitButtonDisabled,
             pressed && styles.submitButtonPressed,
           ]}
           onPress={handleSubmit}
-          disabled={!canSubmit || mutation.isPending}
+          disabled={!canSubmit || isSubmitting}
           accessibilityRole="button"
           accessibilityLabel="Complete onboarding"
           testID="onboarding-submit"
         >
-          {mutation.isPending ? (
-            <ActivityIndicator color={Colors.text} />
+          {isSubmitting ? (
+            <View style={styles.submitLoadingContent}>
+              <ActivityIndicator color={Colors.text} style={{ marginRight: 8 }} />
+              <Text style={styles.submitButtonText}>{submitLabel}</Text>
+            </View>
           ) : (
-            <Text style={styles.submitButtonText}>Start Training</Text>
+            <Text style={styles.submitButtonText}>{submitLabel}</Text>
           )}
         </Pressable>
       </View>
@@ -519,5 +575,9 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '700',
     color: Colors.text,
+  },
+  submitLoadingContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
 });

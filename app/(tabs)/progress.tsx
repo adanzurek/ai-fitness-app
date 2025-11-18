@@ -1,6 +1,5 @@
 import { StyleSheet, Text, View, ScrollView, Platform, ActivityIndicator } from "react-native";
-import { useFitness } from "@/contexts/FitnessContext";
-import { TrendingUp, Award, Target } from "lucide-react-native";
+import { TrendingUp, Award } from "lucide-react-native";
 import Colors from "@/constants/colors";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -8,12 +7,35 @@ import ProgressCards from "@/components/ProgressCards";
 import { useEffect, useState } from "react";
 import { supabase, isSupabaseConfigured } from "@/lib/supabase";
 
+type StrengthSummary = {
+  primary_goal: {
+    exercise_name: string;
+    exercise_id: string;
+    current_1rm: number;
+    target_1rm: number;
+    to_go: number;
+    eta_weeks: number | null;
+    progress_pct: number;
+  } | null;
+  top_movers: {
+    exercise_id: string;
+    exercise_name: string;
+    delta_8_weeks: number;
+    current_1rm: number;
+  }[];
+  recent_prs: {
+    exercise_id: string | null;
+    exercise_name: string;
+    created_at: string;
+    pr_type: string | null;
+  }[];
+};
+
 type ProgressSummaryResponse = {
   ok: boolean;
   streak: {
     current: number;
   };
-  strength_goals: any[];
   month: {
     workouts: number;
     hours: number;
@@ -32,10 +54,22 @@ type ProgressSummaryResponse = {
       training_max: number;
     }[];
   };
+  strength_summary?: StrengthSummary | null;
 };
 
+function formatDate(dateISO: string) {
+  try {
+    const date = new Date(dateISO);
+    return date.toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+    });
+  } catch {
+    return dateISO;
+  }
+}
+
 export default function ProgressScreen() {
-  const { userProfile } = useFitness();
   const insets = useSafeAreaInsets();
   const [progress, setProgress] = useState<ProgressSummaryResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -86,6 +120,10 @@ export default function ProgressScreen() {
 
   const streakCount = progress?.streak.current ?? 0;
   const monthStats = progress?.month;
+  const strength = progress?.strength_summary;
+  const primaryGoal = strength?.primary_goal ?? null;
+  const topMovers = strength?.top_movers ?? [];
+  const recentPrs = strength?.recent_prs ?? [];
 
   if (loading) {
     return (
@@ -126,62 +164,85 @@ export default function ProgressScreen() {
       </View>
 
       <View style={styles.section}>
-        <View style={styles.sectionHeader}>
-          <Target size={20} color={Colors.primary} />
-          <Text style={styles.sectionTitle}>Strength Goals</Text>
-        </View>
-
-        {/* TODO: Replace seeded goals with progress.tm_progress or live training max data */}
-        {(userProfile?.goals ?? []).map((goal) => {
-          const progress = (goal.current / goal.target) * 100;
-          const remaining = goal.target - goal.current;
-          
-          return (
-            <View key={goal.id} style={styles.goalCard}>
-              <View style={styles.goalHeader}>
-                <Text style={styles.goalExercise}>{goal.exercise}</Text>
-                <View style={styles.goalBadge}>
-                  <Text style={styles.goalPercent}>{Math.round(progress)}%</Text>
-                </View>
-              </View>
-
-              <View style={styles.goalStats}>
-                <View style={styles.goalStat}>
-                  <Text style={styles.goalStatLabel}>Current</Text>
-                  <Text style={styles.goalStatValue}>{goal.current} {goal.unit}</Text>
-                </View>
-                <View style={styles.goalStatDivider} />
-                <View style={styles.goalStat}>
-                  <Text style={styles.goalStatLabel}>Target</Text>
-                  <Text style={styles.goalStatValue}>{goal.target} {goal.unit}</Text>
-                </View>
-                <View style={styles.goalStatDivider} />
-                <View style={styles.goalStat}>
-                  <Text style={styles.goalStatLabel}>To Go</Text>
-                  <Text style={styles.goalStatValue}>{remaining} {goal.unit}</Text>
-                </View>
-              </View>
-
-              <View style={styles.progressBarContainer}>
-                <View style={styles.progressBarTrack}>
-                  <LinearGradient
-                    colors={[Colors.primary, Colors.primaryDark]}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 0 }}
-                    style={[styles.progressBarFill, { width: `${Math.min(progress, 100)}%` }]}
-                  />
-                </View>
-              </View>
-
-              <View style={styles.projectionContainer}>
-                <TrendingUp size={14} color={Colors.success} />
-                <Text style={styles.projectionText}>
-                  At current pace, you&apos;ll hit {goal.target} {goal.unit} in ~8 weeks
-                </Text>
+        <Text style={styles.sectionTitle}>Strength Highlights</Text>
+        {primaryGoal ? (
+          <View style={styles.primaryGoalCard}>
+            <View style={styles.primaryGoalHeader}>
+              <Text style={styles.primaryGoalTitle}>{primaryGoal.exercise_name}</Text>
+              <View style={styles.goalBadge}>
+                <Text style={styles.goalPercent}>{Math.round(primaryGoal.progress_pct)}%</Text>
               </View>
             </View>
-          );
-        })}
+            <View style={styles.goalMetricRow}>
+              <View style={styles.goalMetric}>
+                <Text style={styles.goalMetricLabel}>Current</Text>
+                <Text style={styles.goalMetricValue}>{primaryGoal.current_1rm} lbs</Text>
+              </View>
+              <View style={styles.goalMetric}>
+                <Text style={styles.goalMetricLabel}>Target</Text>
+                <Text style={styles.goalMetricValue}>{primaryGoal.target_1rm} lbs</Text>
+              </View>
+              <View style={styles.goalMetric}>
+                <Text style={styles.goalMetricLabel}>To go</Text>
+                <Text style={styles.goalMetricValue}>{primaryGoal.to_go} lbs</Text>
+              </View>
+            </View>
+            <View style={styles.primaryGoalFooter}>
+              <TrendingUp size={16} color={Colors.success} />
+              <Text style={styles.primaryGoalSubtitle}>
+                {typeof primaryGoal.eta_weeks === "number"
+                  ? `~${primaryGoal.eta_weeks} weeks to goal`
+                  : "Keep stacking plates"}
+              </Text>
+            </View>
+          </View>
+        ) : (
+          <View style={styles.primaryGoalCard}>
+            <Text style={styles.primaryGoalTitle}>Primary Goal</Text>
+            <Text style={styles.emptyText}>
+              Set a target exercise in your goals to see a primary strength goal here.
+            </Text>
+          </View>
+        )}
+
+        {topMovers.length > 0 ? (
+          <>
+            <Text style={styles.sectionSubtitle}>Top movers (last 8 weeks)</Text>
+            <View style={styles.topMoversRow}>
+              {topMovers.slice(0, 2).map((mover) => (
+                <View key={mover.exercise_id} style={styles.moverCard}>
+                  <Text style={styles.moverTitle}>{mover.exercise_name}</Text>
+                  <Text style={styles.moverDelta}>+{mover.delta_8_weeks} lbs</Text>
+                  <Text style={styles.moverLabel}>Last 8 weeks</Text>
+                  <Text style={styles.moverSecondary}>Current TM: {mover.current_1rm} lbs</Text>
+                </View>
+              ))}
+            </View>
+          </>
+        ) : (
+          <View style={styles.emptyCard}>
+            <Text style={styles.emptyText}>Train consistently to see your biggest movers here.</Text>
+          </View>
+        )}
+
+        <Text style={styles.sectionSubtitle}>Recent PRs</Text>
+        {recentPrs.length > 0 ? (
+          <View style={styles.prList}>
+            {recentPrs.map((pr) => (
+              <View key={`${pr.exercise_name}-${pr.created_at}`} style={styles.prRow}>
+                <View style={styles.prRowLeft}>
+                  <Text style={styles.prTitle}>{pr.exercise_name}</Text>
+                  <Text style={styles.prDate}>{formatDate(pr.created_at)}</Text>
+                </View>
+                {pr.pr_type ? <Text style={styles.prBadge}>{pr.pr_type}</Text> : null}
+              </View>
+            ))}
+          </View>
+        ) : (
+          <View style={styles.emptyCard}>
+            <Text style={styles.emptyText}>Hit a new PR to see it show up here.</Text>
+          </View>
+        )}
       </View>
 
       <View style={styles.statsSection}>
@@ -286,19 +347,19 @@ const styles = StyleSheet.create({
     fontWeight: "700" as const,
     color: Colors.text,
   },
-  goalCard: {
+  primaryGoalCard: {
     backgroundColor: Colors.cardBackground,
     padding: 20,
-    borderRadius: 16,
+    borderRadius: 20,
     marginBottom: 16,
   },
-  goalHeader: {
+  primaryGoalHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
     marginBottom: 16,
   },
-  goalExercise: {
+  primaryGoalTitle: {
     fontSize: 18,
     fontWeight: "700" as const,
     color: Colors.text,
@@ -314,49 +375,114 @@ const styles = StyleSheet.create({
     fontWeight: "700" as const,
     color: Colors.text,
   },
-  goalStats: {
+  goalMetricRow: {
     flexDirection: "row",
-    justifyContent: "space-around",
-    marginBottom: 20,
+    justifyContent: "space-between",
+    marginBottom: 16,
   },
-  goalStat: {
-    alignItems: "center",
+  goalMetric: {
+    flex: 1,
+    alignItems: "flex-start",
   },
-  goalStatLabel: {
+  goalMetricLabel: {
     fontSize: 12,
     color: Colors.textSecondary,
-    marginBottom: 4,
   },
-  goalStatValue: {
-    fontSize: 18,
+  goalMetricValue: {
+    fontSize: 20,
     fontWeight: "700" as const,
     color: Colors.text,
   },
-  goalStatDivider: {
-    width: 1,
-    backgroundColor: Colors.border,
-  },
-  progressBarContainer: {
-    marginBottom: 12,
-  },
-  progressBarTrack: {
-    height: 12,
-    backgroundColor: Colors.background,
-    borderRadius: 6,
-    overflow: "hidden",
-  },
-  progressBarFill: {
-    height: "100%",
-    borderRadius: 6,
-  },
-  projectionContainer: {
+  primaryGoalFooter: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
+    gap: 8,
   },
-  projectionText: {
+  primaryGoalSubtitle: {
+    color: Colors.textSecondary,
+    fontSize: 14,
+  },
+  sectionSubtitle: {
+    fontSize: 16,
+    fontWeight: "600" as const,
+    color: Colors.text,
+    marginBottom: 8,
+    marginTop: 8,
+  },
+  topMoversRow: {
+    flexDirection: "row",
+    gap: 12,
+    marginBottom: 16,
+  },
+  moverCard: {
+    flex: 1,
+    backgroundColor: Colors.cardBackground,
+    borderRadius: 16,
+    padding: 16,
+  },
+  moverTitle: {
+    fontSize: 15,
+    fontWeight: "600" as const,
+    color: Colors.text,
+    marginBottom: 6,
+  },
+  moverDelta: {
+    fontSize: 26,
+    fontWeight: "800" as const,
+    color: Colors.primary,
+  },
+  moverLabel: {
     fontSize: 13,
-    color: Colors.success,
+    color: Colors.textSecondary,
+    marginBottom: 4,
+  },
+  moverSecondary: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+  },
+  prList: {
+    backgroundColor: Colors.cardBackground,
+    borderRadius: 20,
+  },
+  prRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(255,255,255,0.05)",
+  },
+  prRowLeft: {
+    flex: 1,
+  },
+  prTitle: {
+    fontSize: 15,
+    fontWeight: "600" as const,
+    color: Colors.text,
+  },
+  prDate: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+  },
+  prBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    color: Colors.text,
+    fontSize: 12,
+    fontWeight: "600" as const,
+  },
+  emptyCard: {
+    backgroundColor: Colors.cardBackground,
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 16,
+  },
+  emptyText: {
+    color: Colors.textSecondary,
+    fontSize: 14,
   },
   statsSection: {
     paddingHorizontal: 20,
