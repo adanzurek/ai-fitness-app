@@ -8,7 +8,6 @@ import {
   StyleSheet,
   Text,
   TextInput,
-  TouchableOpacity,
   View,
 } from "react-native";
 import { useRouter } from "expo-router";
@@ -418,16 +417,15 @@ export default function ProfileScreen() {
   return (
     <View style={[styles.container, { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 24 }]}>
       <View style={styles.headerRow}>
-        <TouchableOpacity
+        <Pressable
           onPress={handleBack}
-          activeOpacity={0.8}
           accessibilityRole="button"
           accessibilityLabel="Go back"
-          style={styles.backButton}
+          style={({ pressed }) => [styles.backButton, pressed && styles.backButtonPressed]}
           testID="profile-back-button"
         >
           <ArrowLeft color={Colors.text} size={20} />
-        </TouchableOpacity>
+        </Pressable>
         <Text style={styles.headerTitle}>Profile</Text>
         <View style={styles.iconButtonPlaceholder} />
       </View>
@@ -741,6 +739,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: Colors.cardBackground,
+    transform: [{ scale: 1 }],
+  },
+  backButtonPressed: {
+    backgroundColor: "#141414",
+    transform: [{ scale: 0.95 }],
   },
   iconButtonPlaceholder: {
     width: 46,
