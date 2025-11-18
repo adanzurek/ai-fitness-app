@@ -2,8 +2,10 @@ import 'react-native-url-polyfill/auto';
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Stack, useRouter, useSegments } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Animated, Pressable, StyleSheet } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
+import { ArrowLeft } from "lucide-react-native";
 import { FitnessContext } from "@/contexts/FitnessContext";
 import { useSupabaseUser } from "@/hooks/useSupabaseUser";
 import { getSkipAuth, subscribeSkipAuth } from "@/lib/authSkip";
@@ -14,9 +16,75 @@ SplashScreen.preventAutoHideAsync();
 
 const queryClient = new QueryClient();
 
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+
+type BackButtonProps = {
+  tintColor?: string;
+  canGoBack: boolean;
+};
+
+const BackButtonBase: React.FC<BackButtonProps> = ({ tintColor = "#FFFFFF", canGoBack }) => {
+  const router = useRouter();
+  const scale = useRef(new Animated.Value(1));
+
+  const handlePressIn = useCallback(() => {
+    Animated.spring(scale.current, {
+      toValue: 0.94,
+      useNativeDriver: true,
+      speed: 18,
+      bounciness: 0,
+    }).start();
+  }, []);
+
+  const handlePressOut = useCallback(() => {
+    Animated.spring(scale.current, {
+      toValue: 1,
+      useNativeDriver: true,
+      speed: 18,
+      bounciness: 6,
+    }).start();
+  }, []);
+
+  const handlePress = useCallback(() => {
+    if (!canGoBack) {
+      return;
+    }
+    router.back();
+  }, [canGoBack, router]);
+
+  if (!canGoBack) {
+    return null;
+  }
+
+  return (
+    <AnimatedPressable
+      testID="header-back-button"
+      onPressIn={handlePressIn}
+      onPressOut={handlePressOut}
+      onPress={handlePress}
+      style={[styles.backButton, { transform: [{ scale: scale.current }] }]}
+      accessibilityRole="button"
+      accessibilityLabel="Go back"
+      hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+    >
+      <ArrowLeft color={tintColor} size={22} />
+    </AnimatedPressable>
+  );
+};
+
+const BackButton = React.memo(BackButtonBase);
+BackButton.displayName = "HeaderBackButton";
+
 function RootLayoutNav() {
   return (
-    <Stack screenOptions={{ headerBackTitle: "Back" }}>
+    <Stack
+      screenOptions={{
+        headerBackVisible: false,
+        headerLeft: (props) => (
+          <BackButton tintColor={props.tintColor ?? "#FFFFFF"} canGoBack={Boolean(props.canGoBack)} />
+        ),
+      }}
+    >
       <Stack.Screen name="signin" options={{ headerShown: false }} />
       <Stack.Screen name="signup" options={{ headerShown: false }} />
       <Stack.Screen name="onboarding" options={{ headerShown: false }} />
@@ -175,3 +243,15 @@ export default function RootLayout() {
     </QueryClientProvider>
   );
 }
+
+const styles = StyleSheet.create({
+  backButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+    marginLeft: 8,
+  },
+});
