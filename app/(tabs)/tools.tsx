@@ -17,12 +17,19 @@ import { useQueryClient } from "@tanstack/react-query";
 
 type FunctionTemplateKey = keyof typeof FUNCTION_TEMPLATES;
 
+function formatLocalISO(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 const FUNCTION_TEMPLATES = {
   compose_today: (userId: string) =>
     JSON.stringify(
       {
         user_id: userId,
-        date: new Date().toISOString().split("T")[0],
+        date: formatLocalISO(new Date()),
       },
       null,
       2,
@@ -62,7 +69,7 @@ const FUNCTION_TEMPLATES = {
     JSON.stringify(
       {
         user_id: userId,
-        date: new Date().toISOString().split("T")[0],
+        date: formatLocalISO(new Date()),
         completed: true,
       },
       null,

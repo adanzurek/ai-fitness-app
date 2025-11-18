@@ -4,6 +4,7 @@ import { Stack, useRouter, useSegments } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Animated, Pressable, StyleSheet } from "react-native";
+import Colors from "@/constants/colors";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { ArrowLeft } from "lucide-react-native";
 import { FitnessContext } from "@/contexts/FitnessContext";
@@ -83,6 +84,8 @@ function RootLayoutNav() {
         headerLeft: (props) => (
           <BackButton tintColor={props.tintColor ?? "#FFFFFF"} canGoBack={Boolean(props.canGoBack)} />
         ),
+        contentStyle: { backgroundColor: Colors.background },
+        animation: "fade",
       }}
     >
       <Stack.Screen name="signin" options={{ headerShown: false }} />
