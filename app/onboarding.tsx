@@ -19,8 +19,14 @@ import Colors from "@/constants/colors";
 import { useSupabaseUser } from "@/hooks/useSupabaseUser";
 import { useFitness } from "@/contexts/FitnessContext";
 import { supabase, isSupabaseConfigured } from "@/lib/supabase";
-import type { FitnessGoalType, FitnessLevel, Profile } from "@/types/supabase";
-import { fitnessLevelOptions, goalOptions, trainingDayOptions } from "@/constants/profilePreferences";
+import type { FitnessGoalType, FitnessLevel, Profile, WeekdayName } from "@/types/supabase";
+import {
+  fitnessLevelOptions,
+  goalOptions,
+  weekdayOptions,
+  sortWeekdays,
+  defaultWeekdaysByCount,
+} from "@/constants/profilePreferences";
 
 export default function OnboardingScreen() {
   const router = useRouter();
@@ -29,12 +35,13 @@ export default function OnboardingScreen() {
   const insets = useSafeAreaInsets();
   const queryClient = useQueryClient();
   const [selectedLevel, setSelectedLevel] = useState<FitnessLevel | null>(null);
-  const [selectedDays, setSelectedDays] = useState<number | null>(null);
+  const [selectedWeekdays, setSelectedWeekdays] = useState<WeekdayName[]>([]);
   const [selectedGoal, setSelectedGoal] = useState<FitnessGoalType | null>(null);
   const [customGoal, setCustomGoal] = useState<string>("");
   const [hasPrefilled, setHasPrefilled] = useState<boolean>(false);
   const [hasAlertedProfileError, setHasAlertedProfileError] = useState<boolean>(false);
   const [isFinalizingPlan, setIsFinalizingPlan] = useState<boolean>(false);
+  const selectedDayCount = selectedWeekdays.length;
 
   const profileQuery = useQuery<Profile | null>({
     queryKey: ["profile", user?.id ?? null],
@@ -74,10 +81,13 @@ export default function OnboardingScreen() {
     const profile = profileQuery.data;
     if (profile && !hasPrefilled) {
       setSelectedLevel((profile.experience_level as FitnessLevel | null) ?? null);
-      const scheduleDays = typeof profile.schedule?.training_days_per_week === 'number'
+      const scheduleNames = Array.isArray(profile.schedule?.training_day_names)
+        ? sortWeekdays(profile.schedule.training_day_names)
+        : [];
+      const scheduleDays = typeof profile.schedule?.training_days_per_week === "number"
         ? profile.schedule.training_days_per_week
         : null;
-      setSelectedDays(scheduleDays);
+      setSelectedWeekdays(scheduleNames.length > 0 ? scheduleNames : defaultWeekdaysByCount(scheduleDays));
       const goalMatch = goalOptions.find((option) => option.label === profile.goals);
       if (goalMatch) {
         setSelectedGoal(goalMatch.value);
@@ -102,14 +112,14 @@ export default function OnboardingScreen() {
   }, [profileQuery.isError, profileQuery.error, hasAlertedProfileError]);
 
   const canSubmit = useMemo(() => {
-    if (!selectedLevel || !selectedDays || !selectedGoal) {
+    if (!selectedLevel || selectedDayCount === 0 || !selectedGoal) {
       return false;
     }
     if (selectedGoal === "custom" && customGoal.trim().length === 0) {
       return false;
     }
     return true;
-  }, [selectedGoal, selectedDays, selectedLevel, customGoal]);
+  }, [selectedGoal, selectedDayCount, selectedLevel, customGoal]);
 
   const finalizePlan = useCallback(async () => {
     if (!user?.id || !isSupabaseConfigured) {
@@ -132,12 +142,17 @@ export default function OnboardingScreen() {
         );
         return;
       }
+      const preferredDays = selectedWeekdays;
+      const weekRequest: Record<string, unknown> = {
+        user_id: user.id,
+        start_date: todayISO,
+        days: Math.max(preferredDays.length, 1),
+      };
+      if (preferredDays.length > 0) {
+        weekRequest.preferred_days = preferredDays;
+      }
       const { error: weekError } = await supabase.functions.invoke("generate_week", {
-        body: {
-          user_id: user.id,
-          start_date: todayISO,
-          days: 7,
-        },
+        body: weekRequest,
       });
       if (weekError) {
         console.error("[Onboarding] generate_week error", weekError);
@@ -153,7 +168,7 @@ export default function OnboardingScreen() {
     } finally {
       setIsFinalizingPlan(false);
     }
-  }, [queryClient, user]);
+  }, [queryClient, selectedWeekdays, user]);
 
   const mutation = useMutation({
     mutationFn: async () => {
@@ -175,7 +190,9 @@ export default function OnboardingScreen() {
         full_name: typeof user.user_metadata?.full_name === 'string' ? user.user_metadata.full_name : user.email ?? null,
         experience_level: selectedLevel,
         goals: resolvedGoal,
-        schedule: selectedDays ? { training_days_per_week: selectedDays } : null,
+        schedule: selectedDayCount
+          ? { training_days_per_week: selectedDayCount, training_day_names: selectedWeekdays }
+          : null,
         equipment: null,
         plan: null,
       };
@@ -197,7 +214,8 @@ export default function OnboardingScreen() {
       const nextProfile = {
         ...userProfile,
         fitnessLevel: selectedLevel,
-        trainingDaysPerWeek: selectedDays,
+        trainingDaysPerWeek: selectedDayCount,
+        preferredTrainingDays: selectedWeekdays,
         primaryGoalType,
         primaryGoalCustom: primaryGoalType === 'custom' ? customGoal.trim() || null : null,
       };
@@ -217,9 +235,13 @@ export default function OnboardingScreen() {
     setSelectedLevel(value);
   };
 
-  const handleSelectDays = (value: number) => {
-    console.log('Onboarding select training days', value);
-    setSelectedDays(value);
+  const handleToggleWeekday = (value: WeekdayName) => {
+    console.log("Onboarding toggle training day", value);
+    setSelectedWeekdays((prev) => {
+      const exists = prev.includes(value);
+      const next = exists ? prev.filter((day) => day !== value) : [...prev, value];
+      return sortWeekdays(next);
+    });
   };
 
   const handleSelectGoal = (value: FitnessGoalType) => {
@@ -302,28 +324,37 @@ export default function OnboardingScreen() {
           </View>
 
           <View style={styles.section} testID="onboarding-training-days">
-            <Text style={styles.sectionLabel}>Training Days per Week</Text>
-            <View style={styles.trainingRow}>
-              {trainingDayOptions.map((day) => {
-                const selected = selectedDays === day;
+            <Text style={styles.sectionLabel}>Weekly Training Schedule</Text>
+            <Text style={styles.sectionDescription}>
+              Choose the exact days you prefer to train. We&apos;ll align your plan and calendar to these selections.
+            </Text>
+            <View style={styles.weekdayGrid}>
+              {weekdayOptions.map((option) => {
+                const selected = selectedWeekdays.includes(option.value);
                 return (
                   <Pressable
-                    key={day}
+                    key={option.value}
                     style={({ pressed }) => [
-                      styles.dayChip,
-                      selected && styles.dayChipSelected,
-                      pressed && styles.dayChipPressed,
+                      styles.weekdayChip,
+                      selected && styles.weekdayChipSelected,
+                      pressed && styles.weekdayChipPressed,
                     ]}
-                    onPress={() => handleSelectDays(day)}
-                    testID={`onboarding-days-${day}`}
+                    onPress={() => handleToggleWeekday(option.value)}
+                    testID={`onboarding-day-${option.value}`}
                     accessibilityRole="button"
-                    accessibilityLabel={`Train ${day} days per week`}
+                    accessibilityLabel={`Train on ${option.label}`}
                   >
-                    <Text style={styles.dayChipText}>{day}</Text>
+                    <Text style={styles.weekdayChipShort}>{option.shortLabel}</Text>
+                    <Text style={styles.weekdayChipLabel}>{option.label}</Text>
                   </Pressable>
                 );
               })}
             </View>
+            <Text style={styles.weekdayHelper}>
+              {selectedDayCount > 0
+                ? `Training ${selectedDayCount} day${selectedDayCount > 1 ? "s" : ""} per week`
+                : "Pick at least one day to continue"}
+            </Text>
           </View>
 
           <View style={styles.section} testID="onboarding-goal">
@@ -479,31 +510,49 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
     lineHeight: 20,
   },
-  trainingRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
+  sectionDescription: {
+    fontSize: 14,
+    color: Colors.textSecondary,
+    lineHeight: 20,
+  },
+  weekdayGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
     gap: 12,
   },
-  dayChip: {
-    minWidth: 56,
+  weekdayChip: {
+    width: "30%",
+    minWidth: 90,
     paddingVertical: 12,
-    borderRadius: 16,
+    paddingHorizontal: 12,
+    borderRadius: 18,
     borderWidth: 1,
     borderColor: Colors.border,
     backgroundColor: Colors.cardBackground,
-    alignItems: 'center',
+    alignItems: "flex-start",
+    gap: 4,
   },
-  dayChipSelected: {
+  weekdayChipSelected: {
     borderColor: Colors.primary,
-    backgroundColor: '#1F0B0B',
+    backgroundColor: "#1F0B0B",
   },
-  dayChipPressed: {
-    transform: [{ scale: 0.95 }],
+  weekdayChipPressed: {
+    transform: [{ scale: 0.97 }],
   },
-  dayChipText: {
+  weekdayChipShort: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+    fontWeight: "600",
+  },
+  weekdayChipLabel: {
     fontSize: 16,
-    fontWeight: '700',
+    fontWeight: "700",
     color: Colors.text,
+  },
+  weekdayHelper: {
+    marginTop: 8,
+    fontSize: 13,
+    color: Colors.textSecondary,
   },
   cardStack: {
     gap: 12,

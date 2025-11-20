@@ -1,4 +1,4 @@
-import type { FitnessGoalType, FitnessLevel } from "./supabase";
+import type { FitnessGoalType, FitnessLevel, WeekdayName } from "./supabase";
 
 export type WorkoutType = "Push" | "Pull" | "Legs" | "Upper" | "Lower" | "Full Body" | "Rest";
 
@@ -38,6 +38,7 @@ export type UserProfile = {
   lastWorkoutDate?: string;
   fitnessLevel: FitnessLevel | null;
   trainingDaysPerWeek: number | null;
+  preferredTrainingDays: WeekdayName[] | null;
   primaryGoalType: FitnessGoalType | null;
   primaryGoalCustom: string | null;
 };

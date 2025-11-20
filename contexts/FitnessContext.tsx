@@ -22,6 +22,7 @@ const defaultUserProfile: UserProfile = {
   lastWorkoutDate: undefined,
   fitnessLevel: null,
   trainingDaysPerWeek: null,
+  preferredTrainingDays: null,
   primaryGoalType: null,
   primaryGoalCustom: null,
 };

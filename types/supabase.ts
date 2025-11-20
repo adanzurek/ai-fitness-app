@@ -1,8 +1,18 @@
 export type FitnessLevel = "beginner" | "intermediate" | "advanced";
 export type FitnessGoalType = "strength" | "look_better" | "build_muscle" | "lose_fat" | "custom";
 
+export type WeekdayName =
+  | "monday"
+  | "tuesday"
+  | "wednesday"
+  | "thursday"
+  | "friday"
+  | "saturday"
+  | "sunday";
+
 export interface ProfileSchedule {
   training_days_per_week?: number;
+  training_day_names?: WeekdayName[];
   [key: string]: unknown;
 }
 

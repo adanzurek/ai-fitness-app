@@ -25,7 +25,7 @@ import { Calendar, Flame, Sparkles, Dumbbell, Wand2, ArrowRight } from "lucide-r
 import Colors from "../../constants/colors";
 import { supabase } from "../../lib/supabase";
 import { getSkipAuth, subscribeSkipAuth, setSkipAuth } from "../../lib/authSkip";
-import type { ProfileSchedule } from "../../types/supabase";
+import type { ProfileSchedule, WeekdayName } from "../../types/supabase";
 import { useSupabaseUser } from "../../hooks/useSupabaseUser";
 
 type ProfileData = {
@@ -329,10 +329,16 @@ function HomeScreenContent() {
   } = useUserGoals(userId);
 
   const scheduleDays = useMemo(() => {
-    if (!profile?.schedule || typeof profile.schedule.training_days_per_week !== "number") {
+    if (!profile?.schedule) {
       return DEFAULT_SCHEDULE_DAYS;
     }
-    return profile.schedule.training_days_per_week || DEFAULT_SCHEDULE_DAYS;
+    if (Array.isArray(profile.schedule.training_day_names) && profile.schedule.training_day_names.length > 0) {
+      return profile.schedule.training_day_names.length;
+    }
+    if (typeof profile.schedule.training_days_per_week === "number") {
+      return profile.schedule.training_days_per_week || DEFAULT_SCHEDULE_DAYS;
+    }
+    return DEFAULT_SCHEDULE_DAYS;
   }, [profile]);
 
   const refreshAll = useCallback(async () => {
@@ -380,16 +386,21 @@ function HomeScreenContent() {
       typeof metadata.goal_category_raw === "string" && metadata.goal_category_raw.length > 0
         ? metadata.goal_category_raw
         : "Look like a beast";
+    const preferredScheduleDays: WeekdayName[] = Array.isArray(profile?.schedule?.training_day_names)
+      ? profile.schedule.training_day_names
+      : [];
     const trainingDaysCandidate =
       typeof metadata.training_days === "number"
         ? metadata.training_days
-        : typeof profile?.schedule?.training_days_per_week === "number"
-          ? profile.schedule.training_days_per_week
-          : undefined;
+        : preferredScheduleDays.length > 0
+          ? preferredScheduleDays.length
+          : typeof profile?.schedule?.training_days_per_week === "number"
+            ? profile.schedule.training_days_per_week
+            : undefined;
     const trainingDays = typeof trainingDaysCandidate === "number" && trainingDaysCandidate > 0
       ? trainingDaysCandidate
       : 6;
-    const body = {
+    const body: Record<string, unknown> = {
       user_id: userId,
       start_date: getNextMondayDate(),
       days: 7,
@@ -397,6 +408,9 @@ function HomeScreenContent() {
       goal_category_raw: goalCategory,
       training_days: trainingDays,
     };
+    if (preferredScheduleDays.length > 0) {
+      body.preferred_days = preferredScheduleDays;
+    }
     console.log("[Home] Invoking generate_week", body);
     setGeneratingWeek(true);
     try {
@@ -415,7 +429,7 @@ function HomeScreenContent() {
     } finally {
       setGeneratingWeek(false);
     }
-  }, [profile?.schedule?.training_days_per_week, refreshPlan, refreshTodayWorkout, user, userId]);
+  }, [profile?.schedule?.training_day_names, profile?.schedule?.training_days_per_week, refreshPlan, refreshTodayWorkout, user, userId]);
 
   const handleProfilePress = useCallback(() => {
     console.log("[Home] Navigating to profile");

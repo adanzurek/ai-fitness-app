@@ -21,14 +21,20 @@ import { useSupabaseUser } from "@/hooks/useSupabaseUser";
 import { useFitness } from "@/contexts/FitnessContext";
 import { supabase, isSupabaseConfigured } from "@/lib/supabase";
 import { setSkipAuth } from "@/lib/authSkip";
-import { fitnessLevelOptions, goalOptions, trainingDayOptions } from "@/constants/profilePreferences";
-import type { FitnessGoalType, FitnessLevel, Profile } from "@/types/supabase";
+import {
+  fitnessLevelOptions,
+  goalOptions,
+  weekdayOptions,
+  sortWeekdays,
+  defaultWeekdaysByCount,
+} from "@/constants/profilePreferences";
+import type { FitnessGoalType, FitnessLevel, Profile, WeekdayName } from "@/types/supabase";
 
 type PreferenceField = "level" | "days" | "goal" | null;
 
 type PreferenceState = {
   level: FitnessLevel | null;
-  days: number | null;
+  dayNames: WeekdayName[];
   goalType: FitnessGoalType | null;
   goalCustom: string;
 };
@@ -47,12 +53,13 @@ export default function ProfileScreen() {
   const [signingOut, setSigningOut] = useState<boolean>(false);
   const [activeField, setActiveField] = useState<PreferenceField>(null);
   const [selectedLevel, setSelectedLevel] = useState<FitnessLevel | null>(null);
-  const [selectedDays, setSelectedDays] = useState<number | null>(null);
+  const [selectedDayNames, setSelectedDayNames] = useState<WeekdayName[]>([]);
   const [selectedGoal, setSelectedGoal] = useState<FitnessGoalType | null>(null);
   const [customGoal, setCustomGoal] = useState<string>("");
   const [goalDraft, setGoalDraft] = useState<string>("");
   const [hasInitializedPreferences, setHasInitializedPreferences] = useState<boolean>(false);
   const [regeneratingPlan, setRegeneratingPlan] = useState(false);
+  const trainingDayCount = selectedDayNames.length;
 
   const profileQuery = useQuery<Profile | null>({
     queryKey: ["profile", user?.id ?? null],
@@ -80,6 +87,9 @@ export default function ProfileScreen() {
 
   const applySupabaseProfile = useCallback((profile: Profile) => {
     const level = (profile.experience_level as FitnessLevel | null) ?? null;
+    const weekdayNames = Array.isArray(profile.schedule?.training_day_names)
+      ? sortWeekdays(profile.schedule.training_day_names)
+      : [];
     const days = typeof profile.schedule?.training_days_per_week === "number"
       ? profile.schedule.training_days_per_week
       : null;
@@ -105,16 +115,17 @@ export default function ProfileScreen() {
       setGoalDraft("");
     }
     setSelectedLevel(level);
-    setSelectedDays(days);
+    setSelectedDayNames(weekdayNames.length > 0 ? weekdayNames : defaultWeekdaysByCount(days));
   }, []);
 
   const initializeFromContext = useCallback(() => {
     const level = userProfile.fitnessLevel;
     const days = userProfile.trainingDaysPerWeek;
+    const preferredDays = userProfile.preferredTrainingDays ?? [];
     const goalType = userProfile.primaryGoalType;
     const custom = goalType === "custom" ? userProfile.primaryGoalCustom ?? "" : "";
     setSelectedLevel(level);
-    setSelectedDays(days);
+    setSelectedDayNames(preferredDays.length > 0 ? sortWeekdays(preferredDays) : defaultWeekdaysByCount(days));
     setSelectedGoal(goalType);
     setCustomGoal(custom);
     setGoalDraft(custom);
@@ -155,12 +166,17 @@ export default function ProfileScreen() {
         );
         return;
       }
+      const preferredDays = selectedDayNames;
+      const weekRequest: Record<string, unknown> = {
+        user_id: user.id,
+        start_date: todayISO,
+        days: Math.max(preferredDays.length, 1),
+      };
+      if (preferredDays.length > 0) {
+        weekRequest.preferred_days = preferredDays;
+      }
       const { error: weekError } = await supabase.functions.invoke("generate_week", {
-        body: {
-          user_id: user.id,
-          start_date: todayISO,
-          days: 7,
-        },
+        body: weekRequest,
       });
       if (weekError) {
         console.error("[Profile] generate_week error", weekError);
@@ -176,7 +192,7 @@ export default function ProfileScreen() {
     } finally {
       setRegeneratingPlan(false);
     }
-  }, [queryClient, user]);
+  }, [queryClient, selectedDayNames, user]);
 
   const preferenceMutation = useMutation<PreferenceMutationResult, unknown, PreferenceState>({
     mutationFn: async (state) => {
@@ -185,7 +201,7 @@ export default function ProfileScreen() {
       }
       const sanitizedState: PreferenceState = {
         level: state.level,
-        days: state.days,
+        dayNames: sortWeekdays(state.dayNames),
         goalType: state.goalType,
         goalCustom: state.goalType === "custom" ? state.goalCustom.trim() : "",
       };
@@ -200,7 +216,12 @@ export default function ProfileScreen() {
         id: user.id,
         experience_level: sanitizedState.level,
         goals: goalValue,
-        schedule: sanitizedState.days ? { training_days_per_week: sanitizedState.days } : null,
+        schedule: sanitizedState.dayNames.length
+          ? {
+              training_days_per_week: sanitizedState.dayNames.length,
+              training_day_names: sanitizedState.dayNames,
+            }
+          : null,
         equipment: null,
         plan: null,
       };
@@ -225,13 +246,14 @@ export default function ProfileScreen() {
       const nextProfile = {
         ...userProfile,
         fitnessLevel: resolvedState.level,
-        trainingDaysPerWeek: resolvedState.days,
+        trainingDaysPerWeek: resolvedState.dayNames.length,
+        preferredTrainingDays: resolvedState.dayNames,
         primaryGoalType: resolvedState.goalType,
         primaryGoalCustom: resolvedState.goalType === "custom" ? trimmedCustom || null : null,
       };
       updateUserProfile(nextProfile);
       setSelectedLevel(resolvedState.level);
-      setSelectedDays(resolvedState.days);
+      setSelectedDayNames(resolvedState.dayNames);
       setSelectedGoal(resolvedState.goalType);
       if (resolvedState.goalType === "custom") {
         setCustomGoal(trimmedCustom);
@@ -268,20 +290,24 @@ export default function ProfileScreen() {
     toggleField(null);
     submitPreferences({
       level: value,
-      days: selectedDays,
+      dayNames: selectedDayNames,
       goalType: selectedGoal,
       goalCustom: selectedGoal === "custom" ? goalDraft : "",
     });
   };
 
-  const handleSelectDays = (value: number) => {
-    if (selectedDays === value) {
-      toggleField(null);
+  const handleToggleDayName = (value: WeekdayName) => {
+    const exists = selectedDayNames.includes(value);
+    const next = exists ? selectedDayNames.filter((day) => day !== value) : [...selectedDayNames, value];
+    if (next.length === 0) {
+      Alert.alert("Training days", "Select at least one training day.");
       return;
     }
+    const sorted = sortWeekdays(next);
+    setSelectedDayNames(sorted);
     submitPreferences({
       level: selectedLevel,
-      days: value,
+      dayNames: sorted,
       goalType: selectedGoal,
       goalCustom: selectedGoal === "custom" ? goalDraft : "",
     });
@@ -298,7 +324,7 @@ export default function ProfileScreen() {
     toggleField(null);
     submitPreferences({
       level: selectedLevel,
-      days: selectedDays,
+      dayNames: selectedDayNames,
       goalType: value,
       goalCustom: "",
     });
@@ -312,7 +338,7 @@ export default function ProfileScreen() {
     }
     submitPreferences({
       level: selectedLevel,
-      days: selectedDays,
+      dayNames: selectedDayNames,
       goalType: "custom",
       goalCustom: trimmed,
     });
@@ -328,11 +354,14 @@ export default function ProfileScreen() {
   }, [selectedLevel]);
 
   const daysLabel = useMemo(() => {
-    if (!selectedDays) {
+    if (!trainingDayCount) {
       return "Select days";
     }
-    return `${selectedDays} day${selectedDays > 1 ? "s" : ""} / week`;
-  }, [selectedDays]);
+    const shortLabels = selectedDayNames
+      .map((value) => weekdayOptions.find((option) => option.value === value)?.shortLabel ?? value.slice(0, 3))
+      .join(" · ");
+    return `${shortLabels} (${trainingDayCount} day${trainingDayCount > 1 ? "s" : ""})`;
+  }, [selectedDayNames, trainingDayCount]);
 
   const goalLabel = useMemo(() => {
     if (!selectedGoal) {
@@ -569,23 +598,25 @@ export default function ProfileScreen() {
                 </Pressable>
                 {activeField === "days" && (
                   <View style={styles.dropdown} testID="profile-days-dropdown">
-                    <View style={styles.chipRow}>
-                      {trainingDayOptions.map((day) => {
-                        const isSelected = selectedDays === day;
+                    <Text style={styles.daysHelperText}>Tap the days you plan to train.</Text>
+                    <View style={styles.weekdaySelectionGrid}>
+                      {weekdayOptions.map((option) => {
+                        const isSelected = selectedDayNames.includes(option.value);
                         return (
                           <Pressable
-                            key={day}
-                            onPress={() => handleSelectDays(day)}
+                            key={option.value}
+                            onPress={() => handleToggleDayName(option.value)}
                             style={({ pressed }) => [
-                              styles.preferenceChip,
-                              isSelected && styles.preferenceChipSelected,
-                              pressed && styles.preferenceChipPressed,
+                              styles.weekdaySelectionChip,
+                              isSelected && styles.weekdaySelectionChipSelected,
+                              pressed && styles.weekdaySelectionChipPressed,
                             ]}
                             accessibilityRole="button"
-                            accessibilityLabel={`Train ${day} days each week`}
-                            testID={`profile-day-option-${day}`}
+                            accessibilityLabel={`Train on ${option.label}`}
+                            testID={`profile-day-option-${option.value}`}
                           >
-                            <Text style={styles.preferenceChipText}>{day}</Text>
+                            <Text style={styles.weekdaySelectionShort}>{option.shortLabel}</Text>
+                            <Text style={styles.weekdaySelectionLabel}>{option.label}</Text>
                           </Pressable>
                         );
                       })}
@@ -968,30 +999,44 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     color: Colors.textSecondary,
   },
-  chipRow: {
+  weekdaySelectionGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 10,
+    gap: 12,
+    marginTop: 8,
   },
-  preferenceChip: {
-    paddingVertical: 10,
-    paddingHorizontal: 18,
-    borderRadius: 16,
+  weekdaySelectionChip: {
+    width: "30%",
+    minWidth: 90,
+    borderRadius: 18,
     borderWidth: 1,
     borderColor: Colors.border,
     backgroundColor: "#151515",
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    gap: 4,
   },
-  preferenceChipSelected: {
+  weekdaySelectionChipSelected: {
     borderColor: Colors.primary,
     backgroundColor: "#1F0B0B",
   },
-  preferenceChipPressed: {
-    transform: [{ scale: 0.95 }],
+  weekdaySelectionChipPressed: {
+    transform: [{ scale: 0.97 }],
   },
-  preferenceChipText: {
-    fontSize: 16,
+  weekdaySelectionShort: {
+    fontSize: 12,
+    color: Colors.textSecondary,
+    fontWeight: "600" as const,
+    textTransform: "uppercase",
+  },
+  weekdaySelectionLabel: {
+    fontSize: 15,
     fontWeight: "700" as const,
     color: Colors.text,
+  },
+  daysHelperText: {
+    fontSize: 13,
+    color: Colors.textSecondary,
   },
   customGoalEditor: {
     marginTop: 12,
