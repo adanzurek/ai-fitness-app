@@ -201,9 +201,9 @@ export default function MonthlyCalendar({
                     </Text>
                     {dayData && dayData.workouts.length > 0 && (
                       <View style={styles.workoutBadgeContainer}>
-                        {dayData.workouts.slice(0, 2).map((workout) => (
+                        {dayData.workouts.slice(0, 2).map((workout, idx) => (
                           <Text
-                            key={workout.workout_id}
+                            key={`${workout.workout_id}-${idx}`}
                             style={[styles.workoutTypeLabel, colors && { color: colors.text }]}
                             numberOfLines={1}
                           >

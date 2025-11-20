@@ -5,23 +5,26 @@ import {
   Animated,
   Easing,
   Modal,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
+  ToastAndroid,
   TouchableOpacity,
   View,
   ViewStyle,
 } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useSafeAreaInsets, type EdgeInsets } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { useRouter } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import { Calendar, Flame, Sparkles, Dumbbell, Wand2, ArrowRight } from "lucide-react-native";
 import Colors from "../../constants/colors";
 import { supabase } from "../../lib/supabase";
+import { getSkipAuth, subscribeSkipAuth, setSkipAuth } from "../../lib/authSkip";
 import type { ProfileSchedule } from "../../types/supabase";
 import { useSupabaseUser } from "../../hooks/useSupabaseUser";
 
@@ -145,8 +148,8 @@ type TodaySectionProps = {
   hasPlan: boolean;
   isRestDay: boolean;
   workout: HomeWorkout | null;
-  onPressGeneratePlan: () => void;
-  generatingPlan: boolean;
+  onPressGenerateWeek: () => void;
+  generatingWeek: boolean;
   scheduleDays: number;
   error: string | null;
   exerciseGroups: ExerciseGroup[];
@@ -173,6 +176,11 @@ type StreakCardProps = {
 type GoalsSectionProps = {
   loading: boolean;
   goals: GoalProgress[];
+};
+
+type DemoHomePreviewProps = {
+  insets: EdgeInsets;
+  onPressSignIn: () => void;
 };
 
 type GoalCardProps = {
@@ -235,7 +243,13 @@ function HomeScreenContent() {
   const { user, loading: userLoading } = useSupabaseUser();
   const userId = user?.id ?? null;
   const [refreshing, setRefreshing] = useState<boolean>(false);
-  const [generatingPlan, setGeneratingPlan] = useState<boolean>(false);
+  const [generatingWeek, setGeneratingWeek] = useState<boolean>(false);
+  const [skipAuth, setSkipAuthState] = useState<boolean>(getSkipAuth());
+
+  useEffect(() => {
+    const unsubscribe = subscribeSkipAuth(setSkipAuthState);
+    return unsubscribe;
+  }, []);
 
   const {
     profile,
@@ -255,7 +269,6 @@ function HomeScreenContent() {
     loading: workoutLoading,
     error: todayError,
     refresh: refreshTodayWorkout,
-    composeTodayWorkout,
   } = useTodayWorkout(userId);
 
   const exerciseGroups = useMemo(
@@ -348,22 +361,61 @@ function HomeScreenContent() {
     }, [refreshAll, userId]),
   );
 
-  const handleGeneratePlan = useCallback(async () => {
+  const handleSignInRedirect = useCallback(() => {
+    setSkipAuth(false);
+    router.replace("/signin");
+  }, [router]);
+
+  const handleGenerateWeek = useCallback(async () => {
     if (!userId) {
       Alert.alert("Sign in required", "Please sign in to generate a plan.");
       return;
     }
-    console.log("[Home] Composing today's workout for", userId);
-    setGeneratingPlan(true);
+    const metadata = (user?.user_metadata ?? {}) as Record<string, any>;
+    const goalType =
+      typeof metadata.goal_type === "string" && metadata.goal_type.length > 0
+        ? metadata.goal_type
+        : "general_fitness";
+    const goalCategory =
+      typeof metadata.goal_category_raw === "string" && metadata.goal_category_raw.length > 0
+        ? metadata.goal_category_raw
+        : "Look like a beast";
+    const trainingDaysCandidate =
+      typeof metadata.training_days === "number"
+        ? metadata.training_days
+        : typeof profile?.schedule?.training_days_per_week === "number"
+          ? profile.schedule.training_days_per_week
+          : undefined;
+    const trainingDays = typeof trainingDaysCandidate === "number" && trainingDaysCandidate > 0
+      ? trainingDaysCandidate
+      : 6;
+    const body = {
+      user_id: userId,
+      start_date: getNextMondayDate(),
+      days: 7,
+      goal_type: goalType,
+      goal_category_raw: goalCategory,
+      training_days: trainingDays,
+    };
+    console.log("[Home] Invoking generate_week", body);
+    setGeneratingWeek(true);
     try {
-      await composeTodayWorkout();
+      const { data, error } = await supabase.functions.invoke("generate_week", { body });
+      if (error) {
+        throw error;
+      }
+      if (data && data.error) {
+        throw new Error(typeof data.error === "string" ? data.error : "Unable to generate week");
+      }
+      showToast("New week generated");
+      await Promise.allSettled([refreshPlan(), refreshTodayWorkout()]);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to generate today’s workout.";
-      Alert.alert("Something went wrong", message);
+      console.error("[Home] generate_week failed", err);
+      showToast("Error generating week");
     } finally {
-      setGeneratingPlan(false);
+      setGeneratingWeek(false);
     }
-  }, [composeTodayWorkout, userId]);
+  }, [profile?.schedule?.training_days_per_week, refreshPlan, refreshTodayWorkout, user, userId]);
 
   const handleProfilePress = useCallback(() => {
     console.log("[Home] Navigating to profile");
@@ -414,6 +466,10 @@ function HomeScreenContent() {
     );
   }
 
+  if (!userId && skipAuth) {
+    return <DemoHomePreview insets={insets} onPressSignIn={handleSignInRedirect} />;
+  }
+
   if (!userId) {
     return (
       <View style={styles.loadingContainer}>
@@ -454,8 +510,8 @@ function HomeScreenContent() {
           hasPlan={Boolean(plan)}
           isRestDay={isRestDay}
           workout={todayWorkout}
-          onPressGeneratePlan={handleGeneratePlan}
-          generatingPlan={generatingPlan}
+          onPressGenerateWeek={handleGenerateWeek}
+          generatingWeek={generatingWeek}
           scheduleDays={scheduleDays}
           error={todayError}
           exerciseGroups={exerciseGroups}
@@ -467,7 +523,108 @@ function HomeScreenContent() {
           profile={profile}
           hasLoggedExercise={hasAnyLoggedExercise}
         />
+        <View style={styles.generateWeekContainer}>
+          <TouchableOpacity
+            activeOpacity={0.85}
+            disabled={generatingWeek}
+            onPress={handleGenerateWeek}
+            style={[
+              styles.finishWorkoutButton,
+              styles.generateWeekButton,
+              generatingWeek && styles.finishWorkoutButtonDisabled,
+            ]}
+            testID="generate-week-button"
+          >
+            {generatingWeek ? (
+              <ActivityIndicator color={Colors.background} />
+            ) : (
+              <Text style={styles.finishWorkoutButtonText}>Generate Week</Text>
+            )}
+          </TouchableOpacity>
+        </View>
         <GoalsSection loading={goalsLoading} goals={goals} />
+      </ScrollView>
+    </View>
+  );
+}
+
+function DemoHomePreview({ insets, onPressSignIn }: DemoHomePreviewProps) {
+  const sampleExercises = [
+    { id: "pullup", name: "Pull-Up", detail: "4 sets × 6 reps · tempo 31X1" },
+    { id: "press", name: "Incline Press", detail: "3 sets × 10 reps · RPE 8" },
+    { id: "core", name: "Hanging Knee Raise", detail: "3 sets × 12 reps" },
+  ];
+  const sampleGoals = [
+    { id: "bench", exercise: "Bench Press", percent: 72, current: 185, target: 255, unit: "lb" },
+    { id: "squat", exercise: "Back Squat", percent: 64, current: 265, target: 405, unit: "lb" },
+  ];
+
+  return (
+    <View style={styles.screenContainer}>
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={[
+          styles.scrollContent,
+          { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 80 },
+        ]}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.demoBanner}>
+          <Text style={styles.demoBadge}>Preview mode</Text>
+          <Text style={styles.demoHeadline}>Explore your AI coach</Text>
+          <Text style={styles.demoCopy}>
+            This is a quick preview. Sign in or create an account to sync real workouts, streaks, and
+            plans with Supabase.
+          </Text>
+          <TouchableOpacity style={styles.demoCtaButton} onPress={onPressSignIn} activeOpacity={0.85}>
+            <Text style={styles.demoCtaText}>Sign in to sync progress</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.demoWorkoutCard}>
+          <View style={styles.demoWorkoutHeader}>
+            <View>
+              <Text style={styles.demoWorkoutLabel}>Today&apos;s focus</Text>
+              <Text style={styles.demoWorkoutTitle}>Upper body power</Text>
+            </View>
+            <View style={styles.demoWorkoutBadge}>
+              <Sparkles color={Colors.text} size={16} />
+              <Text style={styles.demoWorkoutBadgeText}>Sample</Text>
+            </View>
+          </View>
+          <Text style={styles.demoWorkoutMeta}>4 total exercises · about 45 minutes</Text>
+          <View style={styles.demoExerciseList}>
+            {sampleExercises.map((exercise) => (
+              <View key={exercise.id} style={styles.demoExerciseItem}>
+                <View style={styles.demoExerciseIcon}>
+                  <Dumbbell size={16} color={Colors.primary} />
+                </View>
+                <View style={styles.demoExerciseInfo}>
+                  <Text style={styles.demoExerciseName}>{exercise.name}</Text>
+                  <Text style={styles.demoExerciseDetail}>{exercise.detail}</Text>
+                </View>
+              </View>
+            ))}
+          </View>
+        </View>
+
+        <View style={styles.demoGoalsCard}>
+          <Text style={styles.demoGoalsTitle}>Progress targets</Text>
+          {sampleGoals.map((goal) => (
+            <View key={goal.id} style={styles.demoGoalRow}>
+              <View style={styles.demoGoalHeader}>
+                <Text style={styles.demoGoalExercise}>{goal.exercise}</Text>
+                <Text style={styles.demoGoalPercent}>{goal.percent}%</Text>
+              </View>
+              <View style={styles.demoGoalTrack}>
+                <View style={[styles.demoGoalFill, { width: `${goal.percent}%` }]} />
+              </View>
+              <Text style={styles.demoGoalMeta}>
+                {goal.current} / {goal.target} {goal.unit}
+              </Text>
+            </View>
+          ))}
+        </View>
       </ScrollView>
     </View>
   );
@@ -529,8 +686,8 @@ function TodaySection({
   hasPlan,
   isRestDay,
   workout,
-  onPressGeneratePlan,
-  generatingPlan,
+  onPressGenerateWeek,
+  generatingWeek,
   scheduleDays,
   error,
   exerciseGroups,
@@ -614,11 +771,11 @@ function TodaySection({
           <TouchableOpacity
             activeOpacity={0.8}
             style={styles.generatePlanButton}
-            onPress={onPressGeneratePlan}
-            disabled={generatingPlan}
+            onPress={onPressGenerateWeek}
+            disabled={generatingWeek}
             testID="generate-plan-button"
           >
-            {generatingPlan ? (
+            {generatingWeek ? (
               <ActivityIndicator color={Colors.text} />
             ) : (
               <>
@@ -1684,6 +1841,26 @@ function mapGoals(latestTm: Record<string, number>, goalRows: SupabaseGoalRow[])
   }, []);
 }
 
+function showToast(message: string) {
+  if (Platform.OS === "android") {
+    ToastAndroid.show(message, ToastAndroid.SHORT);
+    return;
+  }
+  Alert.alert(message);
+}
+
+function getNextMondayDate(): string {
+  const today = new Date();
+  const nextMonday = new Date(today);
+  const dayOfWeek = today.getDay();
+  const daysUntilNextMonday = ((1 - dayOfWeek + 7) % 7) || 7;
+  nextMonday.setDate(today.getDate() + daysUntilNextMonday);
+  const year = nextMonday.getFullYear();
+  const month = (nextMonday.getMonth() + 1).toString().padStart(2, "0");
+  const day = nextMonday.getDate().toString().padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 const styles = StyleSheet.create({
   screenContainer: {
     flex: 1,
@@ -1695,11 +1872,180 @@ const styles = StyleSheet.create({
   scrollContent: {
     paddingHorizontal: 20,
   },
+  demoBanner: {
+    backgroundColor: Colors.cardBackground,
+    borderRadius: 28,
+    padding: 24,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+    marginBottom: 24,
+  },
+  demoBadge: {
+    alignSelf: "flex-start",
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    color: Colors.text,
+    fontSize: 12,
+    fontWeight: "600" as const,
+    marginBottom: 12,
+  },
+  demoHeadline: {
+    fontSize: 26,
+    fontWeight: "700" as const,
+    color: Colors.text,
+    marginBottom: 6,
+  },
+  demoCopy: {
+    fontSize: 15,
+    color: Colors.textSecondary,
+    lineHeight: 21,
+    marginBottom: 16,
+  },
+  demoCtaButton: {
+    backgroundColor: Colors.primary,
+    paddingVertical: 14,
+    borderRadius: 18,
+    alignItems: "center",
+  },
+  demoCtaText: {
+    color: Colors.background,
+    fontWeight: "700" as const,
+    fontSize: 15,
+  },
+  demoWorkoutCard: {
+    backgroundColor: Colors.cardBackground,
+    borderRadius: 28,
+    padding: 24,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+    marginBottom: 24,
+  },
+  demoWorkoutHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 12,
+  },
+  demoWorkoutLabel: {
+    fontSize: 14,
+    color: Colors.textSecondary,
+    marginBottom: 4,
+  },
+  demoWorkoutTitle: {
+    fontSize: 22,
+    fontWeight: "700" as const,
+    color: Colors.text,
+  },
+  demoWorkoutBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.08)",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    gap: 6,
+  },
+  demoWorkoutBadgeText: {
+    color: Colors.text,
+    fontSize: 12,
+    fontWeight: "600" as const,
+  },
+  demoWorkoutMeta: {
+    fontSize: 14,
+    color: Colors.textSecondary,
+    marginBottom: 18,
+  },
+  demoExerciseList: {
+    gap: 12,
+  },
+  demoExerciseItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.04)",
+    borderRadius: 18,
+    padding: 14,
+  },
+  demoExerciseIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "rgba(255,255,255,0.06)",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 12,
+  },
+  demoExerciseInfo: {
+    flex: 1,
+  },
+  demoExerciseName: {
+    fontSize: 16,
+    fontWeight: "600" as const,
+    color: Colors.text,
+    marginBottom: 4,
+  },
+  demoExerciseDetail: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+  },
+  demoGoalsCard: {
+    backgroundColor: Colors.cardBackground,
+    borderRadius: 28,
+    padding: 24,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
+    marginBottom: 24,
+    gap: 18,
+  },
+  demoGoalsTitle: {
+    fontSize: 18,
+    fontWeight: "700" as const,
+    color: Colors.text,
+  },
+  demoGoalRow: {
+    gap: 6,
+  },
+  demoGoalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  demoGoalExercise: {
+    fontSize: 15,
+    color: Colors.text,
+    fontWeight: "600" as const,
+  },
+  demoGoalPercent: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+  },
+  demoGoalTrack: {
+    height: 6,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    borderRadius: 999,
+    overflow: "hidden",
+  },
+  demoGoalFill: {
+    height: "100%",
+    backgroundColor: Colors.primary,
+  },
+  demoGoalMeta: {
+    fontSize: 13,
+    color: Colors.textSecondary,
+  },
+
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
     paddingBottom: 24,
+  },
+  generateWeekContainer: {
+    marginBottom: 24,
+  },
+  generateWeekButton: {
+    alignSelf: "stretch",
   },
   headerCopy: {
     flex: 1,

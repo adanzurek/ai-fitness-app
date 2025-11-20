@@ -188,7 +188,7 @@ function SessionGate({ children }: { children: React.ReactNode }) {
     if (skipAuth) {
       if (isAuthRoute || isOnboardingRoute) {
         console.log('SessionGate skip auth redirecting to tabs');
-        router.replace('/(tabs)');
+        router.replace('/(tabs)/home');
       }
       return;
     }
@@ -202,7 +202,7 @@ function SessionGate({ children }: { children: React.ReactNode }) {
       if (profileQuery.isError) {
         console.error('SessionGate profile error detected', profileQuery.error);
         if (!isOnboardingRoute && !isAuthRoute) {
-          router.replace('/(tabs)');
+          router.replace('/(tabs)/home');
         }
         return;
       }
@@ -215,14 +215,14 @@ function SessionGate({ children }: { children: React.ReactNode }) {
 
       if (hasProfile && isAuthRoute) {
         console.log('SessionGate profile exists redirecting to tabs from auth route');
-        router.replace('/(tabs)');
+        router.replace('/(tabs)/home');
         return;
       }
     }
 
     if (hasAccess && isAuthRoute) {
       console.log('SessionGate auth route redirecting to tabs');
-      router.replace('/(tabs)');
+      router.replace('/(tabs)/home');
     }
   }, [user, loading, segments, skipAuth, router, profileReady, hasProfile, profileQuery.isError, profileQuery.error, profileQuery.isFetched, profileQuery.isEnabled, profileQuery.isFetching]);
 
