@@ -96,6 +96,9 @@ const FUNCTION_TEMPLATES = {
     JSON.stringify(
       {
         user_id: userId,
+        start_date: formatLocalISO(new Date()),
+        training_days: 3,
+        training_day_names: ["monday", "wednesday", "friday"],
       },
       null,
       2,
@@ -103,12 +106,9 @@ const FUNCTION_TEMPLATES = {
   generate_week: (userId: string) =>
     JSON.stringify(
       {
-        user_id: userId,
-        // goal: "increase bench press by 25 pounds",
-        // training_days: 4,
-        // experience_level: "intermediate",
-        // start_date: new Date().toISOString().split("T")[0],
-        // plan_id: "00000000-0000-0000-0000-000000000000",
+        start_date: formatLocalISO(new Date()),
+        training_days_per_week: 3,
+        training_day_names: ["monday", "wednesday", "friday"],
       },
       null,
       2,

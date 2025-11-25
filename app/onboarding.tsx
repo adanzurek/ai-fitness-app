@@ -28,6 +28,13 @@ import {
   defaultWeekdaysByCount,
 } from "@/constants/profilePreferences";
 
+const formatLocalISODate = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
 export default function OnboardingScreen() {
   const router = useRouter();
   const { user, loading } = useSupabaseUser();
@@ -125,13 +132,20 @@ export default function OnboardingScreen() {
     if (!user?.id || !isSupabaseConfigured) {
       return;
     }
-    const todayISO = new Date().toISOString().slice(0, 10);
+    const todayISO = formatLocalISODate(new Date());
+    const preferredDays = selectedWeekdays.map((d) => d.toLowerCase() as WeekdayName);
+    const trainingDaysCount =
+      preferredDays.length > 0
+        ? preferredDays.length
+        : Math.max(1, selectedWeekdays.length || 3);
     try {
       setIsFinalizingPlan(true);
       const { error: planError } = await supabase.functions.invoke("generate_plan_ai", {
         body: {
           user_id: user.id,
           start_date: todayISO,
+          training_days: trainingDaysCount,
+          training_day_names: preferredDays,
         },
       });
       if (planError) {
@@ -142,15 +156,11 @@ export default function OnboardingScreen() {
         );
         return;
       }
-      const preferredDays = selectedWeekdays;
       const weekRequest: Record<string, unknown> = {
-        user_id: user.id,
         start_date: todayISO,
-        days: Math.max(preferredDays.length, 1),
+        training_days_per_week: trainingDaysCount,
+        training_day_names: preferredDays,
       };
-      if (preferredDays.length > 0) {
-        weekRequest.preferred_days = preferredDays;
-      }
       const { error: weekError } = await supabase.functions.invoke("generate_week", {
         body: weekRequest,
       });

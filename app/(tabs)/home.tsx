@@ -22,6 +22,7 @@ import { useFocusEffect } from "@react-navigation/native";
 import { useRouter } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import { Calendar, Flame, Sparkles, Dumbbell, Wand2, ArrowRight } from "lucide-react-native";
+import { useQueryClient } from "@tanstack/react-query";
 import Colors from "../../constants/colors";
 import { supabase } from "../../lib/supabase";
 import { getSkipAuth, subscribeSkipAuth, setSkipAuth } from "../../lib/authSkip";
@@ -142,6 +143,15 @@ type SupabaseTmRow = {
   created_at: string;
 };
 
+type GenerateWeekResponse = {
+  workouts?: unknown[] | null;
+  error?: string | null;
+  week_start?: string | null;
+  ok?: boolean;
+  message?: string;
+  training_dates?: string[] | null;
+};
+
 type TodaySectionProps = {
   loading: boolean;
   planLoading: boolean;
@@ -202,6 +212,28 @@ const GOAL_EXERCISES = [
 
 const DEFAULT_SCHEDULE_DAYS = 4;
 
+const formatLocalISODate = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+const parseISODateToLocal = (iso: string) => {
+  const parts = iso.split("-");
+  if (parts.length === 3) {
+    const [year, month, day] = parts.map((v) => Number(v));
+    if (!parts.some((p) => p.length === 0) && !Number.isNaN(year) && !Number.isNaN(month) && !Number.isNaN(day)) {
+      return new Date(year, month - 1, day);
+    }
+  }
+  return new Date(iso);
+};
+
+async function safeInvoke<T>(name: string, body: Record<string, unknown>) {
+  return supabase.functions.invoke<T>(name, { body });
+}
+
 class HomeErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean }> {
   constructor(props: { children: React.ReactNode }) {
     super(props);
@@ -240,6 +272,7 @@ export default function HomeScreen() {
 function HomeScreenContent() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const queryClient = useQueryClient();
   const { user, loading: userLoading } = useSupabaseUser();
   const userId = user?.id ?? null;
   const [refreshing, setRefreshing] = useState<boolean>(false);
@@ -377,59 +410,60 @@ function HomeScreenContent() {
       Alert.alert("Sign in required", "Please sign in to generate a plan.");
       return;
     }
-    const metadata = (user?.user_metadata ?? {}) as Record<string, any>;
-    const goalType =
-      typeof metadata.goal_type === "string" && metadata.goal_type.length > 0
-        ? metadata.goal_type
-        : "general_fitness";
-    const goalCategory =
-      typeof metadata.goal_category_raw === "string" && metadata.goal_category_raw.length > 0
-        ? metadata.goal_category_raw
-        : "Look like a beast";
-    const preferredScheduleDays: WeekdayName[] = Array.isArray(profile?.schedule?.training_day_names)
-      ? profile.schedule.training_day_names
-      : [];
-    const trainingDaysCandidate =
-      typeof metadata.training_days === "number"
-        ? metadata.training_days
-        : preferredScheduleDays.length > 0
-          ? preferredScheduleDays.length
-          : typeof profile?.schedule?.training_days_per_week === "number"
-            ? profile.schedule.training_days_per_week
-            : undefined;
-    const trainingDays = typeof trainingDaysCandidate === "number" && trainingDaysCandidate > 0
-      ? trainingDaysCandidate
-      : 6;
+    const todayISO = formatLocalISODate(new Date());
+    const trainingDayNames =
+      Array.isArray(profile?.schedule?.training_day_names) &&
+      profile.schedule.training_day_names.length > 0
+        ? profile.schedule.training_day_names.map((d) => d.toLowerCase())
+        : [];
+    const trainingDaysPerWeek =
+      trainingDayNames.length > 0 && Array.isArray(trainingDayNames)
+        ? trainingDayNames.length
+        : typeof profile?.schedule?.training_days_per_week === "number"
+          ? profile.schedule.training_days_per_week
+          : DEFAULT_SCHEDULE_DAYS;
     const body: Record<string, unknown> = {
-      user_id: userId,
-      start_date: getNextMondayDate(),
-      days: 7,
-      goal_type: goalType,
-      goal_category_raw: goalCategory,
-      training_days: trainingDays,
+      start_date: todayISO,
+      training_days_per_week: trainingDaysPerWeek,
     };
-    if (preferredScheduleDays.length > 0) {
-      body.preferred_days = preferredScheduleDays;
+    if (trainingDayNames.length > 0) {
+      body.training_day_names = trainingDayNames;
     }
     console.log("[Home] Invoking generate_week", body);
     setGeneratingWeek(true);
     try {
-      const { data, error } = await supabase.functions.invoke("generate_week", { body });
+      const { data, error } = await safeInvoke<GenerateWeekResponse>("generate_week", body);
       if (error) {
         throw error;
       }
-      if (data && data.error) {
+      if (data && (data as GenerateWeekResponse).error) {
         throw new Error(typeof data.error === "string" ? data.error : "Unable to generate week");
       }
+      console.log("[Home] generate_week result", {
+        week_start: data?.week_start,
+        workouts: Array.isArray(data?.workouts) ? data.workouts.length : 0,
+      });
       showToast("New week generated");
-      await Promise.allSettled([refreshPlan(), refreshTodayWorkout()]);
+      await Promise.allSettled([
+        refreshPlan(),
+        refreshTodayWorkout(),
+        queryClient.invalidateQueries({ queryKey: ["month_calendar"], exact: false }),
+      ]);
     } catch (err) {
       console.error("[Home] generate_week failed", err);
       showToast("Error generating week");
     } finally {
       setGeneratingWeek(false);
     }
-  }, [profile?.schedule?.training_day_names, profile?.schedule?.training_days_per_week, refreshPlan, refreshTodayWorkout, user, userId]);
+  }, [
+    profile?.schedule?.training_day_names,
+    profile?.schedule?.training_days_per_week,
+    queryClient,
+    refreshPlan,
+    refreshTodayWorkout,
+    user,
+    userId,
+  ]);
 
   const handleProfilePress = useCallback(() => {
     console.log("[Home] Navigating to profile");
@@ -715,7 +749,7 @@ function TodaySection({
 }: TodaySectionProps) {
   const firstName = profile?.full_name?.split(" ")[0] ?? "Athlete";
   const formattedDate = workout?.workout_date
-    ? new Date(workout.workout_date).toLocaleDateString("en-US", {
+    ? parseISODateToLocal(workout.workout_date).toLocaleDateString("en-US", {
         weekday: "long",
         month: "long",
         day: "numeric",
@@ -1339,9 +1373,10 @@ function useTodayWorkout(userId: string | null) {
       throw new Error("Sign in required");
     }
     console.log("[Home] compose_today invoked");
+    const todayISO = formatLocalISODate(new Date());
     const { data: composed, error: composeError } = await supabase.functions.invoke<ComposeTodayResponse>(
       "compose_today",
-      { body: {} },
+      { body: { user_id: userId, date: todayISO } },
     );
     if (composeError) {
       console.log("[Home] compose_today error", composeError);
@@ -1861,18 +1896,6 @@ function showToast(message: string) {
     return;
   }
   Alert.alert(message);
-}
-
-function getNextMondayDate(): string {
-  const today = new Date();
-  const nextMonday = new Date(today);
-  const dayOfWeek = today.getDay();
-  const daysUntilNextMonday = ((1 - dayOfWeek + 7) % 7) || 7;
-  nextMonday.setDate(today.getDate() + daysUntilNextMonday);
-  const year = nextMonday.getFullYear();
-  const month = (nextMonday.getMonth() + 1).toString().padStart(2, "0");
-  const day = nextMonday.getDate().toString().padStart(2, "0");
-  return `${year}-${month}-${day}`;
 }
 
 const styles = StyleSheet.create({

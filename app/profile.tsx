@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  InteractionManager,
   Platform,
   Pressable,
   ScrollView,
@@ -32,6 +33,13 @@ import type { FitnessGoalType, FitnessLevel, Profile, WeekdayName } from "@/type
 
 type PreferenceField = "level" | "days" | "goal" | null;
 
+const formatLocalISODate = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
 type PreferenceState = {
   level: FitnessLevel | null;
   dayNames: WeekdayName[];
@@ -59,6 +67,8 @@ export default function ProfileScreen() {
   const [goalDraft, setGoalDraft] = useState<string>("");
   const [hasInitializedPreferences, setHasInitializedPreferences] = useState<boolean>(false);
   const [regeneratingPlan, setRegeneratingPlan] = useState(false);
+  const regenTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const preferenceSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const trainingDayCount = selectedDayNames.length;
 
   const profileQuery = useQuery<Profile | null>({
@@ -149,13 +159,25 @@ export default function ProfileScreen() {
     if (!user?.id || !isSupabaseConfigured) {
       return;
     }
-    const todayISO = new Date().toISOString().slice(0, 10);
+    if (regeneratingPlan) {
+      return;
+    }
+    const todayISO = formatLocalISODate(new Date());
+    const preferredDays = selectedDayNames.map((d) => d.toLowerCase() as WeekdayName);
+    const trainingDaysCount =
+      preferredDays.length > 0
+        ? preferredDays.length
+        : typeof profileQuery.data?.schedule?.training_days_per_week === "number"
+          ? profileQuery.data.schedule.training_days_per_week
+          : Math.max(1, selectedDayNames.length || 3);
     try {
       setRegeneratingPlan(true);
       const { error: planError } = await supabase.functions.invoke("generate_plan_ai", {
         body: {
           user_id: user.id,
           start_date: todayISO,
+          training_days: trainingDaysCount,
+          training_day_names: preferredDays,
         },
       });
       if (planError) {
@@ -166,15 +188,11 @@ export default function ProfileScreen() {
         );
         return;
       }
-      const preferredDays = selectedDayNames;
       const weekRequest: Record<string, unknown> = {
-        user_id: user.id,
         start_date: todayISO,
-        days: Math.max(preferredDays.length, 1),
+        training_days_per_week: trainingDaysCount,
+        training_day_names: preferredDays,
       };
-      if (preferredDays.length > 0) {
-        weekRequest.preferred_days = preferredDays;
-      }
       const { error: weekError } = await supabase.functions.invoke("generate_week", {
         body: weekRequest,
       });
@@ -192,7 +210,30 @@ export default function ProfileScreen() {
     } finally {
       setRegeneratingPlan(false);
     }
-  }, [queryClient, selectedDayNames, user]);
+  }, [queryClient, regeneratingPlan, selectedDayNames, user]);
+
+  const queueRegeneratePlan = useCallback(() => {
+    if (regenTimeoutRef.current) {
+      clearTimeout(regenTimeoutRef.current);
+    }
+    regenTimeoutRef.current = setTimeout(() => {
+      regenTimeoutRef.current = null;
+      InteractionManager.runAfterInteractions(() => {
+        regeneratePlan().catch(() => undefined);
+      });
+    }, 400);
+  }, [regeneratePlan]);
+
+  useEffect(() => {
+    return () => {
+      if (regenTimeoutRef.current) {
+        clearTimeout(regenTimeoutRef.current);
+      }
+      if (preferenceSaveTimeoutRef.current) {
+        clearTimeout(preferenceSaveTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const preferenceMutation = useMutation<PreferenceMutationResult, unknown, PreferenceState>({
     mutationFn: async (state) => {
@@ -263,7 +304,7 @@ export default function ProfileScreen() {
         setGoalDraft("");
       }
       console.log("Profile preferences updated", result.payload ? "profile synced" : "local only");
-      await regeneratePlan();
+      queueRegeneratePlan();
     },
     onError: (error) => {
       console.error("Profile preferences update failed", error);
@@ -276,10 +317,20 @@ export default function ProfileScreen() {
     setActiveField((prev) => (prev === field ? null : field));
   };
 
-  const submitPreferences = (state: PreferenceState) => {
+  const submitPreferences = useCallback((state: PreferenceState) => {
     console.log("Profile submitting preferences", state);
     preferenceMutation.mutate(state);
-  };
+  }, [preferenceMutation]);
+
+  const submitPreferencesDebounced = useCallback((state: PreferenceState) => {
+    if (preferenceSaveTimeoutRef.current) {
+      clearTimeout(preferenceSaveTimeoutRef.current);
+    }
+    preferenceSaveTimeoutRef.current = setTimeout(() => {
+      preferenceSaveTimeoutRef.current = null;
+      InteractionManager.runAfterInteractions(() => submitPreferences(state));
+    }, 220);
+  }, [submitPreferences]);
   const preferencesBusy = preferenceMutation.isPending || regeneratingPlan;
 
   const handleSelectLevel = (value: FitnessLevel) => {
@@ -305,7 +356,7 @@ export default function ProfileScreen() {
     }
     const sorted = sortWeekdays(next);
     setSelectedDayNames(sorted);
-    submitPreferences({
+    submitPreferencesDebounced({
       level: selectedLevel,
       dayNames: sorted,
       goalType: selectedGoal,
@@ -598,7 +649,21 @@ export default function ProfileScreen() {
                 </Pressable>
                 {activeField === "days" && (
                   <View style={styles.dropdown} testID="profile-days-dropdown">
-                    <Text style={styles.daysHelperText}>Tap the days you plan to train.</Text>
+                    <View style={styles.weekdaySelectionHeader}>
+                      <View>
+                        <Text style={styles.daysHelperTitle}>Plan your week</Text>
+                        <Text style={styles.daysHelperText}>Tap the days you plan to train.</Text>
+                      </View>
+                      <View
+                        style={[
+                          styles.dayCountBadge,
+                          trainingDayCount >= 4 && styles.dayCountBadgeActive,
+                        ]}
+                      >
+                        <Text style={styles.dayCountBadgeNumber}>{trainingDayCount}</Text>
+                        <Text style={styles.dayCountBadgeLabel}>of 7</Text>
+                      </View>
+                    </View>
                     <View style={styles.weekdaySelectionGrid}>
                       {weekdayOptions.map((option) => {
                         const isSelected = selectedDayNames.includes(option.value);
@@ -615,8 +680,40 @@ export default function ProfileScreen() {
                             accessibilityLabel={`Train on ${option.label}`}
                             testID={`profile-day-option-${option.value}`}
                           >
-                            <Text style={styles.weekdaySelectionShort}>{option.shortLabel}</Text>
-                            <Text style={styles.weekdaySelectionLabel}>{option.label}</Text>
+                            <LinearGradient
+                              colors={isSelected ? ["#2D1A1A", "#120909"] : ["#161616", "#0F0F0F"]}
+                              start={{ x: 0, y: 0 }}
+                              end={{ x: 1, y: 1 }}
+                              style={styles.weekdaySelectionChipInner}
+                            >
+                              <View style={styles.weekdaySelectionTopRow}>
+                                <Text
+                                  style={[
+                                    styles.weekdaySelectionShort,
+                                    isSelected && styles.weekdaySelectionShortSelected,
+                                  ]}
+                                  numberOfLines={1}
+                                >
+                                  {option.shortLabel}
+                                </Text>
+                                <View
+                                  style={[
+                                    styles.weekdaySelectionDot,
+                                    isSelected && styles.weekdaySelectionDotActive,
+                                  ]}
+                                />
+                              </View>
+                              <Text
+                                style={[
+                                  styles.weekdaySelectionLabel,
+                                  isSelected && styles.weekdaySelectionLabelSelected,
+                                ]}
+                                numberOfLines={1}
+                                ellipsizeMode="tail"
+                              >
+                                {option.label}
+                              </Text>
+                            </LinearGradient>
                           </Pressable>
                         );
                       })}
@@ -999,44 +1096,126 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     color: Colors.textSecondary,
   },
+  weekdaySelectionHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 12,
+    marginTop: 4,
+  },
+  daysHelperTitle: {
+    fontSize: 15,
+    fontWeight: "700" as const,
+    color: Colors.text,
+    letterSpacing: 0.3,
+  },
   weekdaySelectionGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
+    justifyContent: "space-between",
     gap: 12,
-    marginTop: 8,
+    marginTop: 10,
   },
   weekdaySelectionChip: {
     width: "30%",
-    minWidth: 90,
-    borderRadius: 18,
+    minWidth: 104,
+    borderRadius: 16,
     borderWidth: 1,
     borderColor: Colors.border,
-    backgroundColor: "#151515",
-    paddingVertical: 10,
+    backgroundColor: "#121212",
+    overflow: "hidden",
+  },
+  weekdaySelectionChipInner: {
+    flex: 1,
+    paddingVertical: 12,
     paddingHorizontal: 12,
-    gap: 4,
+    gap: 8,
+    borderRadius: 15,
   },
   weekdaySelectionChipSelected: {
     borderColor: Colors.primary,
-    backgroundColor: "#1F0B0B",
+    shadowColor: Colors.primary,
+    shadowOpacity: 0.18,
+    shadowRadius: 5,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 2,
   },
   weekdaySelectionChipPressed: {
-    transform: [{ scale: 0.97 }],
+    transform: [{ scale: 0.985 }],
+  },
+  weekdaySelectionTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
   },
   weekdaySelectionShort: {
     fontSize: 12,
     color: Colors.textSecondary,
     fontWeight: "600" as const,
     textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  weekdaySelectionShortSelected: {
+    color: Colors.text,
   },
   weekdaySelectionLabel: {
     fontSize: 15,
     fontWeight: "700" as const,
     color: Colors.text,
+    flexShrink: 1,
+    lineHeight: 20,
+    letterSpacing: 0.2,
+  },
+  weekdaySelectionLabelSelected: {
+    color: Colors.text,
+  },
+  weekdaySelectionDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: "transparent",
+  },
+  weekdaySelectionDotActive: {
+    backgroundColor: Colors.primary,
+    borderColor: Colors.primary,
   },
   daysHelperText: {
     fontSize: 13,
     color: Colors.textSecondary,
+    lineHeight: 18,
+    marginTop: 2,
+  },
+  dayCountBadge: {
+    minWidth: 70,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: "#121212",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  dayCountBadgeActive: {
+    backgroundColor: "#1F0B0B",
+    borderColor: Colors.primary,
+    shadowColor: Colors.primary,
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 4,
+  },
+  dayCountBadgeNumber: {
+    fontSize: 18,
+    fontWeight: "800" as const,
+    color: Colors.text,
+  },
+  dayCountBadgeLabel: {
+    fontSize: 11,
+    color: Colors.textSecondary,
+    marginTop: -2,
   },
   customGoalEditor: {
     marginTop: 12,
